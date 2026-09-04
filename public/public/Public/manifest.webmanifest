@@ -1,8 +1,7 @@
-
 {
   "name": "Nodysom AI",
-  "short_name": "Nodysom",
-  "description": "Your intelligent daily life assistant.",
+  "short_name": "Nodysom AI",
+  "description": "Your intelligent daily life assistant for planning, learning, tasks, routines and everyday productivity.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
