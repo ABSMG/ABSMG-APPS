@@ -1,147 +1,165 @@
-import React from 'react';
-import { Home, Search, BookOpen, Calendar, User, Mic, Wifi, WifiOff, Smartphone, Monitor } from 'lucide-react';
-import { TabType, UserProfile } from '../types';
+import {
+  Home,
+  Search,
+  BookOpen,
+  Calendar,
+  User,
+  Mic,
+  Wifi,
+  WifiOff,
+  Smartphone,
+  Monitor,
+} from 'lucide-react';
 
-interface NavigationProps {
-  currentTab: TabType;
-  onSelectTab: (tab: TabType) => void;
-  onOpenVoice: () => void;
-  user: UserProfile;
+interface TopHeaderProps {
   isOnline: boolean;
+  onOpenTranslator: () => void;
+  onOpenVoice: () => void;
   isPhoneFrame: boolean;
   onTogglePhoneFrame: () => void;
-  onOpenTranslator: () => void;
 }
 
-export const TopHeader: React.FC<{
-  user: UserProfile;
-  isOnline: boolean;
-  isPhoneFrame: boolean;
-  onTogglePhoneFrame: () => void;
-  onOpenVoice: () => void;
-  onOpenTranslator: () => void;
-}> = ({ user, isOnline, isPhoneFrame, onTogglePhoneFrame, onOpenVoice, onOpenTranslator }) => {
+export function TopHeader({
+  isOnline,
+  onOpenTranslator,
+  onOpenVoice,
+  isPhoneFrame,
+  onTogglePhoneFrame,
+}: TopHeaderProps) {
   return (
-    <header className="sticky top-0 z-30 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 flex items-center justify-between transition-colors">
-      <div className="flex items-center gap-2.5">
-        {/* LifeOS Stylized Brand Icon */}
-        <div className="relative w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-400 p-[1px] shadow-sm shadow-indigo-500/20 flex items-center justify-center">
-          <div className="w-full h-full bg-slate-950 rounded-[11px] flex items-center justify-center">
-            <span className="font-mono text-sm font-bold bg-gradient-to-r from-indigo-400 to-cyan-300 bg-clip-text text-transparent">
-              L
-            </span>
+    <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
+        {/* Brand */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
+            <span className="text-lg font-black text-white">A</span>
+          </div>
+
+          <div className="leading-tight">
+            <h1 className="text-sm font-black tracking-wide text-white sm:text-base">
+              ABSMG APPS
+            </h1>
+            <p className="hidden text-[10px] text-slate-400 sm:block">
+              AI-powered everyday assistant
+            </p>
           </div>
         </div>
 
-        <div>
-          <div className="flex items-center gap-1.5">
-            <span className="font-bold text-slate-100 tracking-tight text-base font-sans">
-              LifeOS
-            </span>
-            <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
-              {user.tier}
-            </span>
+        {/* Desktop actions */}
+        <div className="flex items-center gap-2">
+          <div
+            className={`hidden items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs sm:flex ${
+              isOnline
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+                : 'border-red-500/20 bg-red-500/10 text-red-400'
+            }`}
+          >
+            {isOnline ? <Wifi size={13} /> : <WifiOff size={13} />}
+            <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
-          <p className="text-[11px] text-slate-400 hidden sm:block">
-            Ask. Plan. Learn. Do.
-          </p>
+
+          <button
+            onClick={onOpenTranslator}
+            className="hidden h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-300 transition hover:bg-white/10 sm:flex"
+          >
+            Translate
+          </button>
+
+          <button
+            onClick={onOpenVoice}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:bg-white/10 active:scale-95"
+            aria-label="Voice assistant"
+          >
+            <Mic size={18} />
+          </button>
+
+          <button
+            onClick={onTogglePhoneFrame}
+            className="hidden h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:bg-white/10 lg:flex"
+            aria-label="Toggle device preview"
+          >
+            {isPhoneFrame ? <Monitor size={18} /> : <Smartphone size={18} />}
+          </button>
         </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        {/* Low-data / Connectivity indicator */}
-        <div
-          title={isOnline ? (user.lowDataMode ? 'Low Data Mode Active' : 'Online') : 'Offline Mode Active'}
-          className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full border ${
-            !isOnline
-              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-              : user.lowDataMode
-              ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
-              : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-          }`}
-        >
-          {isOnline ? (
-            <Wifi className="w-3.5 h-3.5" />
-          ) : (
-            <WifiOff className="w-3.5 h-3.5" />
-          )}
-          <span className="text-[10px] font-medium hidden xs:inline">
-            {!isOnline ? 'Offline' : user.lowDataMode ? 'Low-Data' : 'Sync'}
-          </span>
-        </div>
-
-        {/* Quick Translate Button */}
-        <button
-          onClick={onOpenTranslator}
-          className="p-1.5 text-xs rounded-lg text-slate-300 bg-slate-900 border border-slate-800 hover:bg-slate-800 transition-colors"
-          title="Instant Translator"
-        >
-          <span className="text-xs">🌐</span>
-        </button>
-
-        {/* Voice Trigger */}
-        <button
-          onClick={onOpenVoice}
-          className="p-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 hover:border-indigo-500/50 transition-all flex items-center justify-center active:scale-95"
-          title="Voice Assistant"
-        >
-          <Mic className="w-4 h-4 text-indigo-400" />
-        </button>
-
-        {/* Frame Toggle (For mobile app feel on desktop) */}
-        <button
-          onClick={onTogglePhoneFrame}
-          className="hidden md:flex p-2 rounded-lg text-slate-400 hover:text-slate-200 bg-slate-900/50 hover:bg-slate-800/80 border border-slate-800 transition-colors"
-          title={isPhoneFrame ? 'Switch to Full-Width View' : 'Preview as Mobile Device'}
-        >
-          {isPhoneFrame ? (
-            <Monitor className="w-4 h-4" />
-          ) : (
-            <Smartphone className="w-4 h-4" />
-          )}
-        </button>
       </div>
     </header>
   );
-};
+}
 
-export const BottomNav: React.FC<NavigationProps> = ({ currentTab, onSelectTab }) => {
+interface BottomNavProps {
+  activeTab: string;
+  onNavigate: (tab: any) => void;
+}
+
+export function BottomNav({
+  activeTab,
+  onNavigate,
+}: BottomNavProps) {
   const tabs = [
-    { id: 'home', label: 'Home', icon: Home },
-    { id: 'search', label: 'Search', icon: Search },
-    { id: 'learn', label: 'Learn', icon: BookOpen },
-    { id: 'planner', label: 'Planner', icon: Calendar },
-    { id: 'profile', label: 'Profile', icon: User },
+    {
+      id: 'home',
+      label: 'Home',
+      icon: Home,
+    },
+    {
+      id: 'search',
+      label: 'Search',
+      icon: Search,
+    },
+    {
+      id: 'learn',
+      label: 'Learn',
+      icon: BookOpen,
+    },
+    {
+      id: 'planner',
+      label: 'Planner',
+      icon: Calendar,
+    },
+    {
+      id: 'profile',
+      label: 'Profile',
+      icon: User,
+    },
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto md:max-w-none md:static bg-slate-950/95 backdrop-blur-lg border-t border-slate-800/80 px-2 py-1.5 transition-colors">
-      <div className="max-w-md mx-auto flex items-center justify-around">
+    <nav className="safe-bottom fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-slate-950/90 backdrop-blur-2xl lg:static lg:border-t-0 lg:bg-transparent lg:backdrop-blur-none">
+      <div className="mx-auto flex max-w-2xl items-center justify-around px-2 py-2 lg:max-w-none lg:justify-center lg:gap-2 lg:px-6">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          const isActive = currentTab === tab.id;
+          const active = activeTab === tab.id;
+
           return (
             <button
               key={tab.id}
-              id={`nav-tab-${tab.id}`}
-              onClick={() => onSelectTab(tab.id as TabType)}
-              className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition-all duration-200 min-w-[58px] ${
-                isActive
-                  ? 'text-indigo-400 font-semibold scale-105'
-                  : 'text-slate-400 hover:text-slate-200 font-medium'
+              onClick={() => onNavigate(tab.id)}
+              className={`group flex min-w-[62px] flex-col items-center gap-1 rounded-2xl px-3 py-2 text-[11px] font-medium transition-all active:scale-95 sm:min-w-[72px] sm:text-xs ${
+                active
+                  ? 'bg-indigo-500/15 text-indigo-400'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
               }`}
             >
-              <div className="relative">
-                <Icon className={`w-5 h-5 transition-transform ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
-                {isActive && (
-                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-indigo-400 rounded-full" />
-                )}
+              <div
+                className={`flex h-7 w-7 items-center justify-center rounded-xl transition ${
+                  active ? 'bg-indigo-500/15' : ''
+                }`}
+              >
+                <Icon
+                  size={19}
+                  strokeWidth={active ? 2.5 : 2}
+                />
               </div>
-              <span className="text-[11px] mt-1 tracking-tight">{tab.label}</span>
+
+              <span>{tab.label}</span>
+
+              {active && (
+                <span className="absolute bottom-1 h-0.5 w-5 rounded-full bg-indigo-400 lg:hidden" />
+              )}
             </button>
           );
         })}
       </div>
     </nav>
   );
-};
+}
