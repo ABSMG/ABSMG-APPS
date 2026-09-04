@@ -1,1 +1,32 @@
 
+{
+  "name": "Nodysom AI",
+  "short_name": "Nodysom",
+  "description": "Your intelligent daily life assistant.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#020617",
+  "theme_color": "#0F172A",
+  "lang": "en",
+  "categories": [
+    "productivity",
+    "lifestyle",
+    "education"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
