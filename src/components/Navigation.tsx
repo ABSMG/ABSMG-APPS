@@ -30,7 +30,6 @@ export function TopHeader({
     <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
 
-        {/* Nodysom AI Brand */}
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
             <span className="text-lg font-black text-white">N</span>
@@ -47,10 +46,8 @@ export function TopHeader({
           </div>
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-2">
 
-          {/* Online Status */}
           <div
             className={`hidden items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs sm:flex ${
               isOnline
@@ -58,18 +55,10 @@ export function TopHeader({
                 : 'border-red-500/20 bg-red-500/10 text-red-400'
             }`}
           >
-            {isOnline ? (
-              <Wifi size={13} />
-            ) : (
-              <WifiOff size={13} />
-            )}
-
-            <span>
-              {isOnline ? 'Online' : 'Offline'}
-            </span>
+            {isOnline ? <Wifi size={13} /> : <WifiOff size={13} />}
+            <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
 
-          {/* Translator */}
           <button
             onClick={onOpenTranslator}
             className="hidden h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-300 transition hover:bg-white/10 sm:flex"
@@ -77,7 +66,6 @@ export function TopHeader({
             Translate
           </button>
 
-          {/* Voice */}
           <button
             onClick={onOpenVoice}
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:bg-white/10 active:scale-95"
@@ -86,17 +74,12 @@ export function TopHeader({
             <Mic size={18} />
           </button>
 
-          {/* Device Preview */}
           <button
             onClick={onTogglePhoneFrame}
             className="hidden h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300 transition hover:bg-white/10 lg:flex"
             aria-label="Toggle device preview"
           >
-            {isPhoneFrame ? (
-              <Monitor size={18} />
-            ) : (
-              <Smartphone size={18} />
-            )}
+            {isPhoneFrame ? <Monitor size={18} /> : <Smartphone size={18} />}
           </button>
 
         </div>
@@ -116,31 +99,11 @@ export function BottomNav({
 }: BottomNavProps) {
 
   const tabs = [
-    {
-      id: 'home',
-      label: 'Home',
-      icon: Home,
-    },
-    {
-      id: 'search',
-      label: 'Search',
-      icon: Search,
-    },
-    {
-      id: 'learn',
-      label: 'Learn',
-      icon: BookOpen,
-    },
-    {
-      id: 'planner',
-      label: 'Planner',
-      icon: Calendar,
-    },
-    {
-      id: 'profile',
-      label: 'Profile',
-      icon: User,
-    },
+    { id: 'home', label: 'Home', icon: Home },
+    { id: 'search', label: 'Search', icon: Search },
+    { id: 'learn', label: 'Learn', icon: BookOpen },
+    { id: 'planner', label: 'Planner', icon: Calendar },
+    { id: 'profile', label: 'Profile', icon: User },
   ];
 
   return (
