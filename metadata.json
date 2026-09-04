@@ -1,0 +1,10 @@
+{
+  "name": "LifeOS",
+  "description": "Universal everyday AI assistant to ask, plan, learn, and do.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
