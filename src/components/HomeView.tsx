@@ -1,25 +1,25 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Sparkles,
-  Send,
-  Mic,
+  ArrowRight,
   Calendar,
   CheckCircle2,
   Clock,
-  ArrowRight,
+  Mic,
+  Send,
+  Sparkles,
+  Tag,
   Volume2,
   VolumeX,
-  Share2,
-  Bookmark,
   Zap,
-  Tag,
 } from 'lucide-react';
+
 import {
   UserProfile,
   ChatMessage,
   PlannerItem,
   SmartAction,
 } from '../types';
+
 import { SUGGESTED_ACTIONS } from '../data/mockAndDefaults';
 import { speechService } from '../lib/speech';
 import { getTagBadgeStyle } from './PlannerView';
@@ -49,25 +49,33 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
+
     if (hour < 12) return 'Good morning';
     if (hour < 17) return 'Good afternoon';
+
     return 'Good evening';
   };
 
   const todayStr = new Date().toISOString().split('T')[0];
+
   const todayTasks = plannerItems
     .filter((item) => !item.date || item.date === todayStr)
     .slice(0, 4);
 
   const handleSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+    e?.preventDefault();
+
     const query = inputText.trim();
+
     if (!query || isLoading) return;
+
     setInputText('');
+
     await onSendMessage(query);
   };
 
@@ -75,314 +83,477 @@ export const HomeView: React.FC<HomeViewProps> = ({
     if (speakingMsgId === msgId) {
       speechService.stopSpeaking();
       setSpeakingMsgId(null);
-    } else {
-      setSpeakingMsgId(msgId);
-      speechService.speak(text, 'en-US', () => setSpeakingMsgId(null));
+      return;
     }
+
+    setSpeakingMsgId(msgId);
+
+    speechService.speak(
+      text,
+      'en-US',
+      () => setSpeakingMsgId(null)
+    );
   };
 
-  // Auto-scroll chat when history updates
   useEffect(() => {
-    if (chatHistory.length > 2) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatHistory.length > 0) {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: 'smooth',
+      });
     }
   }, [chatHistory, isLoading]);
 
   return (
-    <div className="space-y-6 pb-24 max-w-2xl mx-auto px-4 pt-3">
-      {/* 1. Header Greeting & Intent Prompt */}
-      <section className="space-y-1">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
-            <Zap className="w-3.5 h-3.5" />
-            {getGreeting()}, {user.name || 'Friend'}
-          </span>
-          <span className="text-[11px] text-slate-400">
-            {new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-          </span>
-        </div>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">
-          What do you want to do?
-        </h1>
-        <p className="text-xs text-slate-400">
-          Tell LifeOS what you need in natural language or voice.
-        </p>
-      </section>
+    <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-5 sm:px-6 lg:px-8">
 
-      {/* 2. Large Central AI Input Box */}
-      <section className="relative">
-        <form
-          onSubmit={handleSubmit}
-          className="relative bg-slate-900 border border-slate-750 focus-within:border-indigo-500/80 rounded-2xl p-2 shadow-xl shadow-black/40 transition-all"
-        >
-          <textarea
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit();
-              }
-            }}
-            placeholder="Ask anything, plan a schedule, create a budget, or translate..."
-            rows={2}
-            className="w-full bg-transparent px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none font-sans"
-          />
+      {/* HERO */}
+      <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 p-5 shadow-2xl sm:p-7">
 
-          <div className="flex items-center justify-between pt-1 px-2 border-t border-slate-800/60">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={onOpenVoice}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1.5 text-xs font-medium"
-                title="Speak to LifeOS"
-              >
-                <Mic className="w-4 h-4" />
-                <span className="text-[11px] hidden xs:inline">Voice</span>
-              </button>
+        <div className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-indigo-500/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-20 -left-20 h-48 w-48 rounded-full bg-violet-500/10 blur-3xl" />
 
-              <button
-                type="button"
-                onClick={() => onNavigateTab('search')}
-                className="p-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs transition-colors"
-                title="Universal Search Mode"
-              >
-                Universal Search
-              </button>
+        <div className="relative">
+
+          <div className="mb-4 flex items-center justify-between gap-3">
+
+            <div className="flex items-center gap-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/20">
+                <Sparkles className="h-5 w-5 text-indigo-400" />
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-indigo-300">
+                  {getGreeting()}
+                </p>
+
+                <p className="text-sm font-bold text-white">
+                  {user.name || 'Friend'}
+                </p>
+              </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={isLoading || !inputText.trim()}
-              className="p-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5 active:scale-95"
-            >
-              {isLoading ? (
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span>Send</span>
-                  <Send className="w-3.5 h-3.5" />
-                </>
-              )}
-            </button>
+            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] text-slate-400">
+              {new Date().toLocaleDateString(undefined, {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </div>
+
           </div>
-        </form>
+
+          <h1 className="max-w-2xl text-3xl font-black tracking-tight text-white sm:text-4xl">
+            What can I help you with today?
+          </h1>
+
+          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">
+            Ask questions, plan your day, learn something new,
+            translate text or search for information.
+          </p>
+
+          {/* AI INPUT */}
+          <form
+            onSubmit={handleSubmit}
+            className="mt-6 rounded-2xl border border-white/10 bg-black/20 p-2 backdrop-blur-xl focus-within:border-indigo-500/60"
+          >
+
+            <textarea
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              rows={3}
+              placeholder="Ask ABSMG AI anything..."
+              className="w-full resize-none bg-transparent px-3 py-2 text-sm text-white outline-none placeholder:text-slate-500"
+            />
+
+            <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-2">
+
+              <div className="flex items-center gap-1">
+
+                <button
+                  type="button"
+                  onClick={onOpenVoice}
+                  className="flex h-10 items-center gap-2 rounded-xl bg-white/5 px-3 text-xs font-semibold text-slate-300 transition hover:bg-white/10 hover:text-white active:scale-95"
+                >
+                  <Mic className="h-4 w-4 text-indigo-400" />
+                  <span className="hidden sm:inline">
+                    Voice
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('search')}
+                  className="hidden h-10 rounded-xl px-3 text-xs font-medium text-slate-400 transition hover:bg-white/5 hover:text-white sm:block"
+                >
+                  Search
+                </button>
+
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading || !inputText.trim()}
+                className="flex h-10 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-xs font-bold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40 active:scale-95"
+              >
+                {isLoading ? (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                ) : (
+                  <>
+                    <span>Ask AI</span>
+                    <Send className="h-4 w-4" />
+                  </>
+                )}
+              </button>
+
+            </div>
+          </form>
+
+        </div>
       </section>
 
-      {/* 3. Suggested Action Chips */}
-      <section className="space-y-2">
-        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-          Suggested Actions
-        </span>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {/* QUICK ACTIONS */}
+      <section className="mt-7">
+
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+              Quick Actions
+            </p>
+
+            <h2 className="mt-1 text-lg font-bold text-white">
+              Start something useful
+            </h2>
+          </div>
+
+          <Zap className="h-5 w-5 text-indigo-400" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+
           {SUGGESTED_ACTIONS.map((item) => (
             <button
               key={item.label}
               onClick={() => onSendMessage(item.prompt)}
-              className="text-left p-3 rounded-xl bg-slate-900/80 border border-slate-800/90 hover:border-indigo-500/40 hover:bg-slate-850 transition-all group relative overflow-hidden"
+              className="group relative overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-indigo-500/40 hover:bg-slate-900 active:scale-[0.98]"
             >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] font-medium text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+
+              <div className="mb-4 flex items-center justify-between">
+
+                <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-indigo-400">
                   {item.badge}
                 </span>
-                <ArrowRight className="w-3 h-3 text-slate-500 group-hover:text-indigo-400 group-hover:translate-x-0.5 transition-all" />
+
+                <ArrowRight className="h-4 w-4 text-slate-600 transition group-hover:translate-x-1 group-hover:text-indigo-400" />
+
               </div>
-              <p className="text-xs font-semibold text-slate-200 group-hover:text-white line-clamp-1">
+
+              <p className="text-sm font-bold text-slate-100">
                 {item.label}
               </p>
-              <p className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">
+
+              <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-slate-500">
                 {item.prompt}
               </p>
+
             </button>
           ))}
+
         </div>
+
       </section>
 
-      {/* 4. Active Conversation / Assistant Feed */}
+      {/* CONVERSATION */}
       {chatHistory.length > 0 && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Recent Activity & Conversation
-            </span>
-            <span className="text-[11px] text-slate-400">
+        <section className="mt-8">
+
+          <div className="mb-3 flex items-center justify-between">
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                AI Conversation
+              </p>
+
+              <h2 className="mt-1 text-lg font-bold text-white">
+                Recent activity
+              </h2>
+            </div>
+
+            <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] text-slate-500">
               {chatHistory.length} messages
             </span>
+
           </div>
 
           <div className="space-y-3">
+
             {chatHistory.slice(-6).map((msg) => {
+
               const isAssistant = msg.role === 'assistant';
+
               return (
-                <div
+                <article
                   key={msg.id}
-                  className={`p-4 rounded-2xl border text-xs leading-relaxed transition-all ${
+                  className={`rounded-2xl border p-4 ${
                     isAssistant
-                      ? 'bg-slate-900/90 border-slate-800 text-slate-200'
-                      : 'bg-indigo-950/40 border-indigo-500/20 text-indigo-100 ml-6'
+                      ? 'border-white/10 bg-slate-900/80'
+                      : 'ml-4 border-indigo-500/20 bg-indigo-950/30 sm:ml-12'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-1.5 text-[11px] text-slate-400">
-                    <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+
+                  <div className="mb-3 flex items-center justify-between">
+
+                    <div className="flex items-center gap-2">
+
                       {isAssistant ? (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                          LifeOS Assistant
-                        </>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/15">
+                          <Sparkles className="h-4 w-4 text-indigo-400" />
+                        </div>
                       ) : (
-                        'You'
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-xs font-bold text-white">
+                          You
+                        </div>
                       )}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <span>{msg.timestamp}</span>
-                      {isAssistant && (
-                        <button
-                          onClick={() => handleSpeak(msg.id, msg.content)}
-                          className="p-1 text-slate-400 hover:text-slate-200"
-                          title="Listen to response"
-                        >
-                          {speakingMsgId === msg.id ? (
-                            <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                          ) : (
-                            <Volume2 className="w-3.5 h-3.5 text-slate-400" />
-                          )}
-                        </button>
-                      )}
+
+                      <div>
+                        <p className="text-xs font-bold text-slate-200">
+                          {isAssistant ? 'ABSMG AI' : 'You'}
+                        </p>
+
+                        <p className="text-[9px] text-slate-500">
+                          {msg.timestamp}
+                        </p>
+                      </div>
+
                     </div>
+
+                    {isAssistant && (
+                      <button
+                        onClick={() =>
+                          handleSpeak(msg.id, msg.content)
+                        }
+                        className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                      >
+                        {speakingMsgId === msg.id ? (
+                          <VolumeX className="h-4 w-4 text-rose-400" />
+                        ) : (
+                          <Volume2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
+
                   </div>
 
-                  <p className="whitespace-pre-wrap font-sans text-xs text-slate-200">
+                  <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">
                     {msg.content}
                   </p>
 
-                  {/* Smart Action Detected Card */}
+                  {/* SMART ACTION */}
                   {msg.detectedAction && (
-                    <div className="mt-3 p-3 rounded-xl bg-slate-950/80 border border-indigo-500/30 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
-                          <CheckCircle2 className="w-4 h-4" />
+                    <div className="mt-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+
+                      <div className="flex items-center gap-3">
+
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
+                          <CheckCircle2 className="h-5 w-5 text-indigo-400" />
                         </div>
-                        <div>
-                          <span className="text-[10px] uppercase font-bold text-indigo-300 block">
-                            Structured Action Detected
-                          </span>
-                          <span className="text-xs font-semibold text-slate-100">
-                            {msg.detectedAction.type}: {msg.detectedAction.title}
-                          </span>
+
+                        <div className="min-w-0 flex-1">
+
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-400">
+                            Action detected
+                          </p>
+
+                          <p className="mt-1 truncate text-xs font-bold text-white">
+                            {msg.detectedAction.type}:{' '}
+                            {msg.detectedAction.title}
+                          </p>
+
                           {msg.detectedAction.time && (
-                            <span className="text-[10px] text-slate-400 block">
-                              Scheduled for {msg.detectedAction.date || 'Today'} at {msg.detectedAction.time}
-                            </span>
+                            <p className="mt-1 text-[10px] text-slate-500">
+                              {msg.detectedAction.date || 'Today'} ·{' '}
+                              {msg.detectedAction.time}
+                            </p>
                           )}
+
                         </div>
+
+                        <button
+                          onClick={() =>
+                            onSelectAction(msg.detectedAction!)
+                          }
+                          className="rounded-xl bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-indigo-500 active:scale-95"
+                        >
+                          Confirm
+                        </button>
+
                       </div>
 
-                      <button
-                        onClick={() => onSelectAction(msg.detectedAction!)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all active:scale-95"
-                      >
-                        Confirm
-                      </button>
                     </div>
                   )}
-                </div>
+
+                </article>
               );
             })}
+
             <div ref={messagesEndRef} />
+
           </div>
+
         </section>
       )}
 
-      {/* 5. Today's Agenda & Planner Snapshot */}
-      <section className="space-y-3 pt-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Calendar className="w-4 h-4 text-indigo-400" />
-            <span className="text-xs font-semibold text-slate-200">
-              Today's Daily Plan
-            </span>
+      {/* TODAY'S PLAN */}
+      <section className="mt-8">
+
+        <div className="mb-3 flex items-center justify-between">
+
+          <div className="flex items-center gap-3">
+
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10">
+              <Calendar className="h-5 w-5 text-indigo-400" />
+            </div>
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Planner
+              </p>
+
+              <h2 className="mt-0.5 text-lg font-bold text-white">
+                Today's plan
+              </h2>
+            </div>
+
           </div>
+
           <button
             onClick={() => onNavigateTab('planner')}
-            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1"
+            className="flex items-center gap-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300"
           >
-            Open Planner <ArrowRight className="w-3 h-3" />
+            View all
+            <ArrowRight className="h-3.5 w-3.5" />
           </button>
+
         </div>
 
         {todayTasks.length === 0 ? (
-          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 text-center">
-            <p className="text-xs text-slate-400">
-              No tasks scheduled for today.
+
+          <div className="rounded-2xl border border-dashed border-white/10 bg-slate-900/50 p-6 text-center">
+
+            <Calendar className="mx-auto h-8 w-8 text-slate-600" />
+
+            <p className="mt-3 text-sm font-semibold text-slate-300">
+              Nothing planned yet
             </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Let ABSMG AI organize your day.
+            </p>
+
             <button
-              onClick={() => onSendMessage('Create a balanced study and task schedule for today')}
-              className="mt-2 text-xs text-indigo-400 hover:underline font-medium"
+              onClick={() =>
+                onSendMessage(
+                  'Create a balanced schedule for today'
+                )
+              }
+              className="mt-4 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-indigo-500"
             >
-              Ask LifeOS to generate a schedule →
+              Create my plan
             </button>
+
           </div>
+
         ) : (
+
           <div className="space-y-2">
+
             {todayTasks.map((task) => (
+
               <div
                 key={task.id}
-                className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between group hover:border-slate-700 transition-colors"
+                className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/70 p-3 transition hover:border-white/20"
               >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <button
-                    onClick={() => onToggleTask(task.id)}
-                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${
+
+                <button
+                  onClick={() => onToggleTask(task.id)}
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition ${
+                    task.completed
+                      ? 'border-emerald-500 bg-emerald-500/15 text-emerald-400'
+                      : 'border-slate-700 bg-slate-950 text-transparent hover:border-indigo-500'
+                  }`}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                </button>
+
+                <div className="min-w-0 flex-1">
+
+                  <p
+                    className={`truncate text-sm font-semibold ${
                       task.completed
-                        ? 'bg-emerald-600 border-emerald-500 text-white'
-                        : 'border-slate-700 hover:border-slate-500 bg-slate-950'
+                        ? 'text-slate-500 line-through'
+                        : 'text-slate-200'
                     }`}
                   >
-                    {task.completed && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  </button>
-                  <div className="min-w-0">
-                    <p
-                      className={`text-xs font-medium truncate ${
-                        task.completed
-                          ? 'line-through text-slate-500'
-                          : 'text-slate-200'
-                      }`}
-                    >
-                      {task.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-1 flex-wrap">
-                      {task.time && (
-                        <span className="flex items-center gap-1 font-mono mr-1">
-                          <Clock className="w-3 h-3" /> {task.time}
-                        </span>
-                      )}
-                      {(task.tags && task.tags.length > 0 ? task.tags : (task.category ? [task.category] : [])).map((tag) => (
-                        <span
-                          key={tag}
-                          className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-semibold border ${getTagBadgeStyle(tag)}`}
-                        >
-                          <Tag className="w-2 h-2 opacity-70" />
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
+                    {task.title}
+                  </p>
+
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+
+                    {task.time && (
+                      <span className="flex items-center gap-1 text-[10px] text-slate-500">
+                        <Clock className="h-3 w-3" />
+                        {task.time}
+                      </span>
+                    )}
+
+                    {(task.tags?.length
+                      ? task.tags
+                      : task.category
+                        ? [task.category]
+                        : []
+                    ).map((tag) => (
+
+                      <span
+                        key={tag}
+                        className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold ${getTagBadgeStyle(
+                          tag
+                        )}`}
+                      >
+                        <Tag className="h-2.5 w-2.5" />
+                        {tag}
+                      </span>
+
+                    ))}
+
                   </div>
+
                 </div>
 
                 <span
-                  className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                  className={`rounded-lg px-2 py-1 text-[9px] font-bold uppercase ${
                     task.priority === 'high'
-                      ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                      : 'bg-slate-800 text-slate-400'
+                      ? 'bg-rose-500/10 text-rose-400'
+                      : 'bg-white/5 text-slate-500'
                   }`}
                 >
                   {task.priority}
                 </span>
+
               </div>
+
             ))}
+
           </div>
+
         )}
+
       </section>
-    </div>
+
+    </main>
   );
 };
