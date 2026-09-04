@@ -22,32 +22,53 @@
 
     <meta name="theme-color" content="#0F172A" />
 
-    <meta property="og:title" content="Nodysom AI" />
+    <!-- PWA -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="Nodysom AI" />
 
-    <meta
-      property="og:description"
-      content="Plan your day. Live smarter."
-    />
-
-    <meta property="og:type" content="website" />
-
-    <meta name="twitter:card" content="summary_large_image" />
-
+    <!-- Apple -->
     <meta
       name="apple-mobile-web-app-title"
       content="Nodysom AI"
     />
-
     <meta
       name="apple-mobile-web-app-capable"
       content="yes"
     />
-
     <meta
       name="apple-mobile-web-app-status-bar-style"
       content="black-translucent"
     />
 
+    <!-- Social sharing -->
+    <meta property="og:title" content="Nodysom AI" />
+    <meta
+      property="og:description"
+      content="Plan your day. Live smarter."
+    />
+    <meta property="og:type" content="website" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- PWA Manifest -->
+    <link
+      rel="manifest"
+      href="/manifest.webmanifest"
+    />
+
+    <!-- Icons -->
+    <link
+      rel="icon"
+      href="/icons/icon-192.png"
+      type="image/png"
+    />
+
+    <link
+      rel="apple-touch-icon"
+      href="/icons/icon-192.png"
+    />
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
 
     <link
@@ -62,14 +83,14 @@
     />
   </head>
 
-  <body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500/30 selection:text-indigo-200 min-h-screen">
-
+  <body
+    class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500/30 selection:text-indigo-200 min-h-screen"
+  >
     <div id="root"></div>
 
     <script
       type="module"
       src="/src/main.tsx"
     ></script>
-
   </body>
 </html>
