@@ -1,0 +1,154 @@
+name: Nodysom AI - Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build Nodysom AI Android AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Build web application
+        run: npm run build
+
+      - name: Install Capacitor packages
+        run: |
+          npm install @capacitor/core@7.4.4
+          npm install @capacitor/android@7.4.4
+          npm install --save-dev @capacitor/cli@7.4.4
+
+      - name: Create Capacitor configuration
+        run: |
+          cat > capacitor.config.ts <<'EOF'
+          import type { CapacitorConfig } from '@capacitor/cli';
+
+          const config: CapacitorConfig = {
+            appId: 'com.nodysom.ai',
+            appName: 'Nodysom AI',
+            webDir: 'dist',
+
+            server: {
+              url: 'https://absmg-apps.onrender.com',
+              cleartext: false
+            },
+
+            android: {
+              allowMixedContent: false
+            },
+
+            plugins: {
+              SplashScreen: {
+                launchShowDuration: 1500,
+                launchAutoHide: true,
+                backgroundColor: '#020617',
+                showSpinner: false
+              }
+            }
+          };
+
+          export default config;
+          EOF
+
+      - name: Create Android project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      - name: Update Android SDK configuration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = [
+              Path("android/variables.gradle"),
+              Path("android/build.gradle"),
+              Path("android/app/build.gradle"),
+          ]
+
+          for path in files:
+              if not path.exists():
+                  continue
+
+              text = path.read_text()
+
+              replacements = {
+                  "compileSdkVersion = 35": "compileSdkVersion = 36",
+                  "targetSdkVersion = 35": "targetSdkVersion = 36",
+                  "compileSdkVersion 35": "compileSdkVersion 36",
+                  "targetSdkVersion 35": "targetSdkVersion 36",
+                  "compileSdk 35": "compileSdk 36",
+                  "targetSdk 35": "targetSdk 36",
+              }
+
+              for old, new in replacements.items():
+                  text = text.replace(old, new)
+
+              path.write_text(text)
+          PY
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-36"
+          sdkmanager "build-tools;35.0.0"
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Make Gradle executable
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Clean Android project
+        working-directory: android
+        run: ./gradlew clean --no-daemon
+
+      - name: Build Release AAB
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon --stacktrace
+
+      - name: Verify AAB
+        run: |
+          echo "Checking generated AAB..."
+          ls -lah android/app/build/outputs/bundle/release/
+          test -f android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload Nodysom AI AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nodysom-AI-AAB
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
