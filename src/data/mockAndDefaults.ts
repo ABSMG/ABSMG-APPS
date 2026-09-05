@@ -2,12 +2,27 @@ export const DEFAULT_USER = {
   id: 'default-user',
   name: 'Nodysom User',
   email: '',
-  avatar: '',
-  bio: '',
-  location: '',
-  nativeLanguage: 'sw',
-  learningLanguages: ['en'],
+  preferredLanguage: 'sw',
+  country: 'TZ',
+  tier: 'FREE',
+  lowDataMode: false,
+  interests: [],
+  goals: '',
+  isGuest: true,
 };
+
+export const INITIAL_MEMORIES = [
+  {
+    id: 'memory_welcome',
+    category: 'fact' as const,
+    content: 'Nodysom AI is your personal AI companion.',
+    createdAt: new Date().toISOString(),
+  },
+];
+
+export const INITIAL_PLANNER_ITEMS = [];
+
+export const INITIAL_HABITS = [];
 
 export const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English', native: 'English', flag: '🌐' },
