@@ -1,7 +1,6 @@
 import { UserProfile, MemoryItem, PlannerItem, HabitItem } from '../types';
 
-export const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English', native: 'English', flag: '🌐' },
+export const SUPPORTED_LANGUAGES = [ code: 'en', name: 'English', native: 'English', flag: '🌐' },
   { code: 'sw', name: 'Swahili', native: 'Kiswahili', flag: '🇹🇿' },
   { code: 'fr', name: 'French', native: 'Français', flag: '🇫🇷' },
   { code: 'es', name: 'Spanish', native: 'Español', flag: '🇪🇸' },
@@ -10,6 +9,7 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'hi', name: 'Hindi', native: 'हिन्दी', flag: '🇮🇳' },
   { code: 'zh', name: 'Chinese', native: '中文', flag: '🇨🇳' },
 ];
+  {
 
 export const DEFAULT_USER: UserProfile = {
   id: 'user_default_101',
