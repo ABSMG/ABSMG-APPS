@@ -1,4 +1,4 @@
-name: Build Nodysom AI Android
+name: Nodysom AI Android Build
 
 on:
   workflow_dispatch:
@@ -6,8 +6,12 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  build-android:
+  android:
+    name: Build Nodysom AI AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -26,7 +30,10 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Add Android platform
+      - name: Install Capacitor
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Create Android project
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
@@ -44,12 +51,16 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Android AAB
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Build Android App Bundle
         working-directory: android
         run: ./gradlew bundleRelease --no-daemon
 
-      - name: Upload AAB
+      - name: Upload Nodysom AI AAB
         uses: actions/upload-artifact@v4
         with:
           name: Nodysom-AI-AAB
           path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
