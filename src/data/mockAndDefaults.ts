@@ -1,38 +1,30 @@
-export const DEFAULT_USER = {
-  id: 'default-user',
-  name: 'Nodysom User',
-  email: '',
-  preferredLanguage: 'sw',
-  country: 'TZ',
-  tier: 'FREE',
-  lowDataMode: false,
-  interests: [],
-  goals: '',
-  isGuest: true,
-};
-
-export const INITIAL_MEMORIES = [
+export const SUGGESTED_ACTIONS = [
   {
-    id: 'memory_welcome',
-    category: 'fact' as const,
-    content: 'Nodysom AI is your personal AI companion.',
-    createdAt: new Date().toISOString(),
+    id: 'plan_day',
+    title: 'Plan my day',
+    description: 'Create a smart plan for today',
+    prompt: 'Help me plan my day',
+    icon: 'calendar',
+  },
+  {
+    id: 'learn',
+    title: 'Learn something',
+    description: 'Start a quick learning session',
+    prompt: 'Teach me something useful',
+    icon: 'book',
+  },
+  {
+    id: 'organize',
+    title: 'Organize my tasks',
+    description: 'Turn my thoughts into actionable tasks',
+    prompt: 'Help me organize my tasks',
+    icon: 'check',
+  },
+  {
+    id: 'ideas',
+    title: 'Give me ideas',
+    description: 'Generate useful ideas and possibilities',
+    prompt: 'Give me useful ideas',
+    icon: 'lightbulb',
   },
 ];
-
-export const INITIAL_PLANNER_ITEMS = [];
-
-export const INITIAL_HABITS = [];
-
-export const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English', native: 'English', flag: '🌐' },
-  { code: 'sw', name: 'Swahili', native: 'Kiswahili', flag: '🇹🇿' },
-  { code: 'fr', name: 'French', native: 'Français', flag: '🇫🇷' },
-  { code: 'es', name: 'Spanish', native: 'Español', flag: '🇪🇸' },
-  { code: 'ar', name: 'Arabic', native: 'العربية', flag: '🇦🇪' },
-  { code: 'pt', name: 'Portuguese', native: 'Português', flag: '🇧🇷' },
-  { code: 'hi', name: 'Hindi', native: 'हिन्दी', flag: '🇮🇳' },
-  { code: 'zh', name: 'Chinese', native: '中文', flag: '🇨🇳' },
-];
-
-export const LANGUAGES = SUPPORTED_LANGUAGES;
