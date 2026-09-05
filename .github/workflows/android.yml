@@ -1,4 +1,4 @@
-name: Nodysom AI - Android Build
+name: Nodysom AI Android Build
 
 on:
   workflow_dispatch:
@@ -10,33 +10,41 @@ permissions:
   contents: read
 
 jobs:
-  build-android:
+  android:
     name: Build Nodysom AI Android AAB
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - name: Install Node dependencies
-        run: npm install
+      - name: Create package lock
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Enable npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
 
       - name: Build web application
         run: npm run build
 
-      - name: Install Capacitor packages
+      - name: Install Capacitor
         run: |
-          npm install @capacitor/core@7.4.4
-          npm install @capacitor/android@7.4.4
-          npm install --save-dev @capacitor/cli@7.4.4
+          npm install @capacitor/core@7.4.4 @capacitor/android@7.4.4 --no-audit --no-fund
+          npm install --save-dev @capacitor/cli@7.4.4 --no-audit --no-fund
 
-      - name: Create Capacitor configuration
+      - name: Create Capacitor config
         run: |
           cat > capacitor.config.ts <<'EOF'
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -53,15 +61,6 @@ jobs:
 
             android: {
               allowMixedContent: false
-            },
-
-            plugins: {
-              SplashScreen: {
-                launchShowDuration: 1500,
-                launchAutoHide: true,
-                backgroundColor: '#020617',
-                showSpinner: false
-              }
             }
           };
 
@@ -70,41 +69,9 @@ jobs:
 
       - name: Create Android project
         run: |
-          if [ ! -d "android" ]; then
+          if [ ! -d android ]; then
             npx cap add android
           fi
-
-      - name: Update Android SDK configuration
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          files = [
-              Path("android/variables.gradle"),
-              Path("android/build.gradle"),
-              Path("android/app/build.gradle"),
-          ]
-
-          for path in files:
-              if not path.exists():
-                  continue
-
-              text = path.read_text()
-
-              replacements = {
-                  "compileSdkVersion = 35": "compileSdkVersion = 36",
-                  "targetSdkVersion = 35": "targetSdkVersion = 36",
-                  "compileSdkVersion 35": "compileSdkVersion 36",
-                  "targetSdkVersion 35": "targetSdkVersion 36",
-                  "compileSdk 35": "compileSdk 36",
-                  "targetSdk 35": "targetSdk 36",
-              }
-
-              for old, new in replacements.items():
-                  text = text.replace(old, new)
-
-              path.write_text(text)
-          PY
 
       - name: Sync Capacitor
         run: npx cap sync android
@@ -114,12 +81,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android API 36
+      - name: Install Android SDK
         run: |
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-36"
@@ -128,13 +94,37 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
 
+      - name: Configure Android API 36
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for path in [
+              Path("android/variables.gradle"),
+              Path("android/build.gradle"),
+              Path("android/app/build.gradle")
+          ]:
+              if path.exists():
+                  text = path.read_text()
+
+                  replacements = {
+                      "compileSdkVersion = 35": "compileSdkVersion = 36",
+                      "targetSdkVersion = 35": "targetSdkVersion = 36",
+                      "compileSdkVersion 35": "compileSdkVersion 36",
+                      "targetSdkVersion 35": "targetSdkVersion 36",
+                      "compileSdk 35": "compileSdk 36",
+                      "targetSdk 35": "targetSdk 36"
+                  }
+
+                  for old, new in replacements.items():
+                      text = text.replace(old, new)
+
+                  path.write_text(text)
+          PY
+
       - name: Make Gradle executable
         working-directory: android
         run: chmod +x gradlew
-
-      - name: Clean Android project
-        working-directory: android
-        run: ./gradlew clean --no-daemon
 
       - name: Build Release AAB
         working-directory: android
@@ -142,11 +132,11 @@ jobs:
 
       - name: Verify AAB
         run: |
-          echo "Checking generated AAB..."
-          ls -lah android/app/build/outputs/bundle/release/
+          echo "Checking AAB..."
+          find android/app/build/outputs -name "*.aab" -print
           test -f android/app/build/outputs/bundle/release/app-release.aab
 
-      - name: Upload Nodysom AI AAB
+      - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: Nodysom-AI-AAB
