@@ -1,3 +1,14 @@
+export const DEFAULT_USER = {
+  id: 'default-user',
+  name: 'Nodysom User',
+  email: '',
+  avatar: '',
+  bio: '',
+  location: '',
+  nativeLanguage: 'sw',
+  learningLanguages: ['en'],
+};
+
 export const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English', native: 'English', flag: '🌐' },
   { code: 'sw', name: 'Swahili', native: 'Kiswahili', flag: '🇹🇿' },
