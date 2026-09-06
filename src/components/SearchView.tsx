@@ -1,253 +1,402 @@
 import React, { useState } from 'react';
 import {
   Search,
-  CheckCircle2,
-  HelpCircle,
-  TrendingUp,
-  ExternalLink,
   Sparkles,
+  CheckCircle2,
+  ExternalLink,
+  AlertCircle,
   ArrowRight,
-  ShieldCheck,
-  AlertTriangle,
+  Clock3,
 } from 'lucide-react';
-import { SearchResult } from '../types';
 
-interface SearchViewProps {
-  onTriggerAction: (actionText: string) => void;
-  preferredLanguage?: string;
+interface SearchResult {
+  query: string;
+  summary: string;
+  verifiedFacts: string[];
+  estimates: string[];
+  uncertainties: string[];
+  sources: Array<{
+    title: string;
+    url?: string;
+  }>;
+  suggestedActions: string[];
 }
 
-export const SearchView: React.FC<SearchViewProps> = ({
-  onTriggerAction,
-  preferredLanguage = 'en',
-}) => {
+interface SearchViewProps {
+  onSearch?: (query: string) => void;
+  result?: SearchResult | null;
+  loading?: boolean;
+}
+
+export function SearchView({
+  onSearch,
+  result,
+  loading = false,
+}: SearchViewProps) {
   const [query, setQuery] = useState('');
-  const [result, setResult] = useState<SearchResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [searchHistory, setSearchHistory] = useState<string[]>([
-    'How do scholarships in Africa work?',
-    'What is the difference between inflation and interest rate?',
-    'How to build an offline-first app for low-end phones?',
-  ]);
 
-  const handleSearch = async (targetQuery?: string) => {
-    const q = (targetQuery || query).trim();
-    if (!q || isLoading) return;
+  const submitSearch = (event: React.FormEvent) => {
+    event.preventDefault();
 
-    setIsLoading(true);
-    setQuery(q);
+    const value = query.trim();
 
-    if (!searchHistory.includes(q)) {
-      setSearchHistory([q, ...searchHistory.slice(0, 5)]);
-    }
+    if (!value) return;
 
-    try {
-      const res = await fetch('/api/ai/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, language: preferredLanguage }),
-      });
-      const data = await res.json();
-      setResult({
-        query: q,
-        summary: data.summary || 'No summary available.',
-        verifiedFacts: data.verifiedFacts || [],
-        estimates: data.estimates || [],
-        uncertainties: data.uncertainties || [],
-        sources: data.sources || [{ title: 'LifeOS Verified Knowledge', url: '#' }],
-        suggestedActions: data.suggestedActions || ['Save to planner', 'Explore in learning hub'],
-      });
-    } catch (e) {
-      console.error('Search error:', e);
-    } finally {
-      setIsLoading(false);
-    }
+    onSearch?.(value);
   };
 
   return (
-    <div className="space-y-6 pb-24 max-w-2xl mx-auto px-4 pt-3">
-      {/* Header */}
-      <section className="space-y-1">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
-            <Search className="w-4 h-4" />
-          </div>
-          <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">
-            Universal Search Engine
-          </span>
+    <main className="nodysom-fade-up mx-auto w-full max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:px-8">
+
+      {/* HEADER */}
+      <section className="mb-7">
+        <div className="mb-2 inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-400">
+          <Sparkles size={13} />
+          Intelligent Search
         </div>
-        <h1 className="text-2xl font-bold text-slate-100 tracking-tight">
-          Ask questions, not keywords
+
+        <h1 className="nodysom-page-title">
+          Search with Nodysom
         </h1>
-        <p className="text-xs text-slate-400">
-          Concise factual answers clearly separating verified facts, estimates, and uncertainty.
+
+        <p className="nodysom-page-subtitle max-w-2xl">
+          Search for information and get a clear answer with
+          facts, estimates, uncertainties and useful sources.
         </p>
       </section>
 
-      {/* Search Input Bar */}
-      <section>
+      {/* SEARCH BOX */}
+      <section className="relative overflow-hidden rounded-[24px] border border-white/[0.08] bg-white/[0.035] p-3 shadow-2xl shadow-black/20 backdrop-blur-xl sm:p-4">
+
+        <div className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-indigo-500/10 blur-3xl" />
+
         <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSearch();
-          }}
-          className="relative flex items-center bg-slate-900 border border-slate-750 focus-within:border-indigo-500 rounded-2xl shadow-xl p-1.5"
+          onSubmit={submitSearch}
+          className="relative flex flex-col gap-3 sm:flex-row"
         >
-          <Search className="w-5 h-5 text-slate-500 ml-3 shrink-0" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask anything (e.g., 'What scholarships exist for East Africa?')"
-            className="w-full bg-transparent px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
-          />
+
+          <div className="relative flex-1">
+
+            <Search
+              size={18}
+              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+
+            <input
+              value={query}
+              onChange={(event) =>
+                setQuery(event.target.value)
+              }
+              placeholder="What would you like to know?"
+              className="nodysom-input pl-11 pr-4"
+              aria-label="Search query"
+            />
+
+          </div>
+
           <button
             type="submit"
-            disabled={isLoading || !query.trim()}
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold shadow-md transition-all shrink-0"
+            disabled={!query.trim() || loading}
+            className="nodysom-btn nodysom-btn-primary min-w-[120px] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {isLoading ? (
-              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            {loading ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                Searching
+              </>
             ) : (
-              'Search'
+              <>
+                <Search size={16} />
+                Search
+              </>
             )}
           </button>
+
         </form>
+
       </section>
 
-      {/* Quick Search Chips */}
-      {!result && !isLoading && (
-        <section className="space-y-2">
-          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-            Popular Inquiries
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {searchHistory.map((h) => (
-              <button
-                key={h}
-                onClick={() => handleSearch(h)}
-                className="text-xs px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-indigo-500/40 transition-colors text-left flex items-center gap-1.5"
-              >
-                <Sparkles className="w-3 h-3 text-indigo-400" />
-                <span>{h}</span>
-              </button>
-            ))}
-          </div>
+      {/* EMPTY STATE */}
+      {!result && !loading && (
+        <section className="mt-6 grid gap-4 sm:grid-cols-3">
+
+          {[
+            {
+              title: 'Ask anything',
+              text: 'Search questions in natural language.',
+            },
+            {
+              title: 'Understand faster',
+              text: 'Get concise answers organized clearly.',
+            },
+            {
+              title: 'Check sources',
+              text: 'Review useful sources behind the answer.',
+            },
+          ].map((item) => (
+            <div
+              key={item.title}
+              className="nodysom-card-soft p-5"
+            >
+              <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-300">
+                <Sparkles size={16} />
+              </div>
+
+              <h3 className="text-sm font-bold text-white">
+                {item.title}
+              </h3>
+
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                {item.text}
+              </p>
+            </div>
+          ))}
+
         </section>
       )}
 
-      {/* Search Results Display */}
-      {result && (
-        <section className="space-y-4 animate-in fade-in duration-200">
-          {/* Summary Card */}
-          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 shadow-lg">
-            <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider block">
-              Concise Answer
-            </span>
-            <p className="text-sm font-medium text-slate-100 leading-relaxed font-sans">
-              {result.summary}
-            </p>
+      {/* LOADING */}
+      {loading && (
+        <section className="mt-6 space-y-4">
+
+          <div className="nodysom-card p-5">
+            <div className="h-4 w-32 animate-pulse rounded bg-white/[0.07]" />
+            <div className="mt-4 h-4 w-full animate-pulse rounded bg-white/[0.05]" />
+            <div className="mt-2 h-4 w-5/6 animate-pulse rounded bg-white/[0.05]" />
+            <div className="mt-2 h-4 w-2/3 animate-pulse rounded bg-white/[0.05]" />
           </div>
 
-          {/* Fact vs Estimate vs Uncertainty Triad */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Verified Facts */}
-            <div className="p-3.5 rounded-2xl bg-emerald-950/20 border border-emerald-500/20 space-y-2">
-              <div className="flex items-center gap-1.5 text-emerald-400">
-                <ShieldCheck className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-wider">
-                  Verified Facts
-                </span>
-              </div>
-              <ul className="space-y-1.5">
-                {result.verifiedFacts.map((fact, i) => (
-                  <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5 leading-snug">
-                    <span className="text-emerald-400 font-bold">•</span>
-                    <span>{fact}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Estimates & Calculations */}
-            <div className="p-3.5 rounded-2xl bg-amber-950/20 border border-amber-500/20 space-y-2">
-              <div className="flex items-center gap-1.5 text-amber-400">
-                <TrendingUp className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-wider">
-                  Estimates & Models
-                </span>
-              </div>
-              <ul className="space-y-1.5">
-                {result.estimates.map((est, i) => (
-                  <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5 leading-snug">
-                    <span className="text-amber-400 font-bold">•</span>
-                    <span>{est}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Uncertainties & Caveats */}
-            <div className="p-3.5 rounded-2xl bg-purple-950/20 border border-purple-500/20 space-y-2">
-              <div className="flex items-center gap-1.5 text-purple-400">
-                <AlertTriangle className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-wider">
-                  Uncertainty / Caveats
-                </span>
-              </div>
-              <ul className="space-y-1.5">
-                {result.uncertainties.map((unc, i) => (
-                  <li key={i} className="text-xs text-slate-300 flex items-start gap-1.5 leading-snug">
-                    <span className="text-purple-400 font-bold">•</span>
-                    <span>{unc}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="nodysom-card h-36 animate-pulse" />
+            <div className="nodysom-card h-36 animate-pulse" />
           </div>
 
-          {/* Sources & Citations */}
-          {result.sources.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                References & Data Sources
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {result.sources.map((src, i) => (
-                  <div
-                    key={i}
-                    className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-indigo-300"
-                  >
-                    <span>{src.title}</span>
-                    <ExternalLink className="w-3 h-3 text-slate-400" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Actionable Next Steps */}
-          {result.suggestedActions.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-indigo-950/30 border border-indigo-500/20 space-y-2">
-              <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider block">
-                Actionable Next Steps
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {result.suggestedActions.map((act, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onTriggerAction(act)}
-                    className="text-xs px-3 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/30 transition-all flex items-center gap-1 active:scale-95"
-                  >
-                    <span>{act}</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </section>
       )}
-    </div>
+
+      {/* RESULTS */}
+      {result && !loading && (
+        <section className="mt-6 space-y-5">
+
+          {/* SUMMARY */}
+          <div className="nodysom-card overflow-hidden">
+
+            <div className="border-b border-white/[0.06] p-5 sm:p-6">
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-400">
+                    Answer
+                  </p>
+
+                  <h2 className="mt-1 text-lg font-extrabold text-white">
+                    {result.query}
+                  </h2>
+                </div>
+
+                <span className="nodysom-badge nodysom-badge-success">
+                  <CheckCircle2 size={12} />
+                  Search complete
+                </span>
+
+              </div>
+
+              <p className="mt-5 text-sm leading-7 text-slate-300">
+                {result.summary}
+              </p>
+
+            </div>
+
+            {/* VERIFIED FACTS */}
+            {result.verifiedFacts?.length > 0 && (
+              <div className="p-5 sm:p-6">
+
+                <div className="mb-4 flex items-center gap-2">
+                  <CheckCircle2
+                    size={17}
+                    className="text-emerald-400"
+                  />
+
+                  <h3 className="text-sm font-bold text-white">
+                    Verified facts
+                  </h3>
+                </div>
+
+                <div className="space-y-2">
+                  {result.verifiedFacts.map(
+                    (fact, index) => (
+                      <div
+                        key={`${fact}-${index}`}
+                        className="rounded-xl border border-emerald-400/[0.08] bg-emerald-400/[0.035] p-3 text-xs leading-5 text-slate-300"
+                      >
+                        {fact}
+                      </div>
+                    )
+                  )}
+                </div>
+
+              </div>
+            )}
+
+          </div>
+
+          {/* ESTIMATES + UNCERTAINTIES */}
+          <div className="grid gap-4 lg:grid-cols-2">
+
+            {result.estimates?.length > 0 && (
+              <div className="nodysom-card p-5">
+
+                <div className="mb-4 flex items-center gap-2">
+                  <Clock3
+                    size={17}
+                    className="text-amber-300"
+                  />
+
+                  <h3 className="text-sm font-bold text-white">
+                    Estimates
+                  </h3>
+                </div>
+
+                <div className="space-y-2">
+                  {result.estimates.map(
+                    (item, index) => (
+                      <div
+                        key={`${item}-${index}`}
+                        className="rounded-xl bg-amber-400/[0.04] p-3 text-xs leading-5 text-slate-400"
+                      >
+                        {item}
+                      </div>
+                    )
+                  )}
+                </div>
+
+              </div>
+            )}
+
+            {result.uncertainties?.length > 0 && (
+              <div className="nodysom-card p-5">
+
+                <div className="mb-4 flex items-center gap-2">
+                  <AlertCircle
+                    size={17}
+                    className="text-sky-300"
+                  />
+
+                  <h3 className="text-sm font-bold text-white">
+                    Uncertainties
+                  </h3>
+                </div>
+
+                <div className="space-y-2">
+                  {result.uncertainties.map(
+                    (item, index) => (
+                      <div
+                        key={`${item}-${index}`}
+                        className="rounded-xl bg-sky-400/[0.04] p-3 text-xs leading-5 text-slate-400"
+                      >
+                        {item}
+                      </div>
+                    )
+                  )}
+                </div>
+
+              </div>
+            )}
+
+          </div>
+
+          {/* SOURCES */}
+          {result.sources?.length > 0 && (
+            <div className="nodysom-card p-5">
+
+              <div className="mb-4 flex items-center gap-2">
+                <ExternalLink
+                  size={17}
+                  className="text-indigo-300"
+                />
+
+                <h3 className="text-sm font-bold text-white">
+                  Sources
+                </h3>
+              </div>
+
+              <div className="space-y-2">
+                {result.sources.map(
+                  (source, index) => (
+                    <a
+                      key={`${source.title}-${index}`}
+                      href={source.url || '#'}
+                      target={
+                        source.url
+                          ? '_blank'
+                          : undefined
+                      }
+                      rel={
+                        source.url
+                          ? 'noreferrer'
+                          : undefined
+                      }
+                      className="group flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.025] p-3 transition-colors hover:border-indigo-400/20 hover:bg-indigo-500/[0.05]"
+                    >
+
+                      <span className="min-w-0 truncate text-xs font-medium text-slate-300 group-hover:text-white">
+                        {source.title}
+                      </span>
+
+                      <ExternalLink
+                        size={14}
+                        className="shrink-0 text-slate-600 group-hover:text-indigo-300"
+                      />
+
+                    </a>
+                  )
+                )}
+              </div>
+
+            </div>
+          )}
+
+          {/* SUGGESTED ACTIONS */}
+          {result.suggestedActions?.length > 0 && (
+            <div className="rounded-[22px] border border-indigo-400/10 bg-indigo-500/[0.05] p-5">
+
+              <div className="mb-4 flex items-center gap-2">
+                <Sparkles
+                  size={17}
+                  className="text-indigo-300"
+                />
+
+                <h3 className="text-sm font-bold text-white">
+                  Suggested next steps
+                </h3>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {result.suggestedActions.map(
+                  (action, index) => (
+                    <button
+                      key={`${action}-${index}`}
+                      type="button"
+                      className="group inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 text-xs font-semibold text-slate-300 transition-all hover:border-indigo-400/25 hover:bg-indigo-500/10 hover:text-white active:scale-95"
+                    >
+                      {action}
+
+                      <ArrowRight
+                        size={13}
+                        className="text-slate-600 transition-transform group-hover:translate-x-0.5 group-hover:text-indigo-300"
+                      />
+                    </button>
+                  )
+                )}
+              </div>
+
+            </div>
+          )}
+
+        </section>
+      )}
+
+    </main>
   );
-};
+}
