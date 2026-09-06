@@ -24,6 +24,51 @@ export const INITIAL_PLANNER_ITEMS: PlannerItem[] = [];
 
 export const INITIAL_HABITS: HabitItem[] = [];
 
+/* QUICK ACTIONS FOR HOME VIEW */
+export const SUGGESTED_ACTIONS = [
+  {
+    label: 'Plan my day',
+    prompt: 'Create a balanced schedule for today',
+    badge: 'PLAN',
+  },
+  {
+    label: 'Learn something',
+    prompt: 'Teach me something useful today',
+    badge: 'LEARN',
+  },
+  {
+    label: 'Translate text',
+    prompt: 'Help me translate this text',
+    badge: 'LANGUAGE',
+  },
+  {
+    label: 'Search information',
+    prompt: 'Search for the latest information about a topic',
+    badge: 'SEARCH',
+  },
+  {
+    label: 'Set a reminder',
+    prompt: 'Help me create a reminder',
+    badge: 'REMINDER',
+  },
+  {
+    label: 'Create a task',
+    prompt: 'Help me create a task',
+    badge: 'TASK',
+  },
+  {
+    label: 'Study with me',
+    prompt: 'Help me study and understand a topic',
+    badge: 'STUDY',
+  },
+  {
+    label: 'Ask AI',
+    prompt: 'I want to ask ABSMG AI a question',
+    badge: 'AI',
+  },
+];
+
+/* LEARNING SUBJECTS */
 export const LEARNING_SUBJECTS = [
   {
     id: 'languages',
