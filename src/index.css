@@ -1,70 +1,614 @@
-
 @import "tailwindcss";
 
 :root {
-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-color-scheme: dark;
-background: #020617;
-color: #f8fafc;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+
+  color-scheme: dark;
+  background: #020617;
+  color: #f8fafc;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
-  }
+}
 
 html {
-min-width: 320px;
-background: #020617;
--webkit-text-size-adjust: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  background: #020617;
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
 }
 
 body {
-margin: 0;
-min-width: 320px;
-min-height: 100vh;
-background:
-radial-gradient(circle at top, rgba(79, 70, 229, 0.12), transparent 35%),
-#020617;
-overflow-x: hidden;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+
+  background:
+    radial-gradient(
+      circle at 50% -10%,
+      rgba(99, 102, 241, 0.16),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at 0% 40%,
+      rgba(139, 92, 246, 0.08),
+      transparent 28%
+    ),
+    #020617;
+
+  color: #f8fafc;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+
+  background-image:
+    linear-gradient(
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    );
+
+  background-size: 48px 48px;
+
+  mask-image: linear-gradient(
+    to bottom,
+    black,
+    transparent 75%
+  );
 }
 
 button,
 input,
 textarea,
 select {
-font: inherit;
+  font: inherit;
 }
 
 button {
--webkit-tap-highlight-color: transparent;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
-textarea,
-input {
-font-size: 16px;
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgba(129, 140, 248, 0.8);
+  outline-offset: 2px;
 }
+
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* --------------------------------------------------
+   APP ROOT
+-------------------------------------------------- */
 
 #root {
-min-height: 100vh;
-width: 100%;
+  min-height: 100vh;
+  width: 100%;
 }
+
+.app-shell {
+  min-height: 100vh;
+  width: 100%;
+}
+
+.app-content {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+
+  padding:
+    24px
+    24px
+    calc(110px + env(safe-area-inset-bottom));
+}
+
+/* --------------------------------------------------
+   PREMIUM CARDS
+-------------------------------------------------- */
+
+.nodysom-card {
+  position: relative;
+
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 22px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.018)
+    );
+
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.nodysom-card:hover {
+  border-color: rgba(129, 140, 248, 0.2);
+
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.28),
+    0 0 30px rgba(99, 102, 241, 0.05);
+}
+
+.nodysom-card-soft {
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(14px);
+}
+
+/* --------------------------------------------------
+   MODERN BUTTONS
+-------------------------------------------------- */
+
+.nodysom-btn {
+  position: relative;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  min-height: 44px;
+  padding: 0 16px;
+
+  border-radius: 13px;
+  border: 1px solid transparent;
+
+  font-size: 13px;
+  font-weight: 700;
+
+  cursor: pointer;
+
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.nodysom-btn:active {
+  transform: scale(0.96);
+}
+
+.nodysom-btn-primary {
+  color: white;
+
+  border-color: rgba(129, 140, 248, 0.35);
+
+  background:
+    linear-gradient(
+      135deg,
+      #6366f1,
+      #7c3aed
+    );
+
+  box-shadow:
+    0 10px 30px rgba(79, 70, 229, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.nodysom-btn-primary:hover {
+  box-shadow:
+    0 14px 36px rgba(79, 70, 229, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+
+  transform: translateY(-1px);
+}
+
+.nodysom-btn-secondary {
+  color: #cbd5e1;
+
+  border-color: rgba(255, 255, 255, 0.09);
+
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.nodysom-btn-secondary:hover {
+  color: white;
+  border-color: rgba(129, 140, 248, 0.25);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.nodysom-btn-ghost {
+  color: #94a3b8;
+  background: transparent;
+}
+
+.nodysom-btn-ghost:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nodysom-btn-danger {
+  color: #fecaca;
+
+  border-color: rgba(248, 113, 113, 0.18);
+
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.nodysom-btn-danger:hover {
+  background: rgba(248, 113, 113, 0.14);
+}
+
+/* --------------------------------------------------
+   INPUTS
+-------------------------------------------------- */
+
+.nodysom-input {
+  width: 100%;
+
+  min-height: 46px;
+  padding: 0 14px;
+
+  color: #f8fafc;
+
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+
+  background: rgba(255, 255, 255, 0.035);
+
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.nodysom-input::placeholder {
+  color: #64748b;
+}
+
+.nodysom-input:hover {
+  border-color: rgba(255, 255, 255, 0.13);
+}
+
+.nodysom-input:focus {
+  border-color: rgba(129, 140, 248, 0.55);
+
+  background: rgba(99, 102, 241, 0.05);
+
+  box-shadow:
+    0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+textarea.nodysom-input {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  resize: vertical;
+}
+
+/* --------------------------------------------------
+   HEADINGS
+-------------------------------------------------- */
+
+.nodysom-page-title {
+  margin: 0;
+
+  font-size: clamp(
+    24px,
+    4vw,
+    34px
+  );
+
+  line-height: 1.1;
+  font-weight: 850;
+  letter-spacing: -0.035em;
+
+  color: white;
+}
+
+.nodysom-page-subtitle {
+  margin-top: 8px;
+
+  color: #94a3b8;
+
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.nodysom-section-title {
+  color: white;
+
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+/* --------------------------------------------------
+   BADGES
+-------------------------------------------------- */
+
+.nodysom-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  min-height: 28px;
+  padding: 0 10px;
+
+  border-radius: 999px;
+
+  border: 1px solid rgba(255, 255, 255, 0.08);
+
+  background: rgba(255, 255, 255, 0.04);
+
+  color: #cbd5e1;
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.nodysom-badge-primary {
+  color: #c7d2fe;
+
+  border-color: rgba(129, 140, 248, 0.18);
+
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.nodysom-badge-success {
+  color: #a7f3d0;
+
+  border-color: rgba(52, 211, 153, 0.16);
+
+  background: rgba(16, 185, 129, 0.08);
+}
+
+/* --------------------------------------------------
+   DIVIDER
+-------------------------------------------------- */
+
+.nodysom-divider {
+  width: 100%;
+  height: 1px;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.09),
+      transparent
+    );
+}
+
+/* --------------------------------------------------
+   SCROLLBAR
+-------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color:
+    rgba(129, 140, 248, 0.3)
+    transparent;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(129, 140, 248, 0.25);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(129, 140, 248, 0.45);
+}
+
+/* --------------------------------------------------
+   SAFE AREAS
+-------------------------------------------------- */
 
 .safe-bottom {
-padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
 }
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* --------------------------------------------------
+   ANIMATIONS
+-------------------------------------------------- */
+
+@keyframes nodysom-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nodysom-pulse {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.nodysom-fade-up {
+  animation:
+    nodysom-fade-up
+    360ms
+    ease-out
+    both;
+}
+
+.nodysom-pulse {
+  animation:
+    nodysom-pulse
+    2s
+    ease-in-out
+    infinite;
+}
+
+/* --------------------------------------------------
+   MOBILE
+-------------------------------------------------- */
 
 @media (max-width: 640px) {
-body {
-font-size: 14px;
+  body {
+    font-size: 14px;
+  }
+
+  button {
+    min-height: 42px;
+  }
+
+  .app-content {
+    padding:
+      18px
+      14px
+      calc(104px + env(safe-area-inset-bottom));
+  }
+
+  .nodysom-card {
+    border-radius: 18px;
+  }
+
+  .nodysom-page-title {
+    font-size: 25px;
+  }
+
+  .nodysom-btn {
+    min-height: 44px;
+    border-radius: 12px;
+  }
 }
 
-button {
-min-height: 42px;
+/* --------------------------------------------------
+   TABLET / DESKTOP
+-------------------------------------------------- */
+
+@media (min-width: 768px) {
+  .app-content {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
 }
+
+@media (min-width: 1024px) {
+  .app-content {
+    padding-top: 30px;
+  }
 }
+
+/* --------------------------------------------------
+   PHONE FRAME MODE
+-------------------------------------------------- */
+
+@media (min-width: 768px) {
+  .phone-frame {
+    width: 390px;
+    max-width: calc(100vw - 32px);
+    min-height: 760px;
+
+    margin: 24px auto;
+
+    overflow: hidden;
+
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 38px;
+
+    background: #020617;
+
+    box-shadow:
+      0 30px 100px rgba(0, 0, 0, 0.5),
+      0 0 50px rgba(99, 102, 241, 0.08);
+  }
+}
+
+/* --------------------------------------------------
+   ACCESSIBILITY / REDUCED MOTION
+-------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------
+   STANDALONE / PWA
+-------------------------------------------------- */
 
 @media (display-mode: standalone) {
-body {
-padding-top: env(safe-area-inset-top);
-}
+  body {
+    padding-top: env(safe-area-inset-top);
+  }
 }
