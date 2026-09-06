@@ -73,6 +73,54 @@ export const LANGUAGES = [
 ];
 
 /* =========================================================
+   SUPPORTED LANGUAGES
+   Used by TranslatorModal
+   ========================================================= */
+
+export const SUPPORTED_LANGUAGES = [
+  {
+    code: 'en',
+    name: 'English',
+    flag: '🇬🇧',
+  },
+  {
+    code: 'sw',
+    name: 'Swahili',
+    flag: '🇹🇿',
+  },
+  {
+    code: 'fr',
+    name: 'French',
+    flag: '🇫🇷',
+  },
+  {
+    code: 'es',
+    name: 'Spanish',
+    flag: '🇪🇸',
+  },
+  {
+    code: 'de',
+    name: 'German',
+    flag: '🇩🇪',
+  },
+  {
+    code: 'pt',
+    name: 'Portuguese',
+    flag: '🇵🇹',
+  },
+  {
+    code: 'ar',
+    name: 'Arabic',
+    flag: '🇸🇦',
+  },
+  {
+    code: 'zh',
+    name: 'Chinese',
+    flag: '🇨🇳',
+  },
+];
+
+/* =========================================================
    QUICK ACTIONS
    Used by HomeView
    ========================================================= */
