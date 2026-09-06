@@ -5,11 +5,15 @@ import {
   HabitItem,
 } from '../types';
 
+/* =========================================================
+   DEFAULT USER
+   ========================================================= */
+
 export const DEFAULT_USER: UserProfile = {
   id: 'default-user',
   name: 'Nodysom User',
   email: '',
-  preferredLanguage: 'English',
+  preferredLanguage: 'en',
   country: '',
   tier: 'FREE',
   lowDataMode: false,
@@ -18,13 +22,61 @@ export const DEFAULT_USER: UserProfile = {
   isGuest: true,
 };
 
+/* =========================================================
+   INITIAL DATA
+   ========================================================= */
+
 export const INITIAL_MEMORIES: MemoryItem[] = [];
 
 export const INITIAL_PLANNER_ITEMS: PlannerItem[] = [];
 
 export const INITIAL_HABITS: HabitItem[] = [];
 
-/* QUICK ACTIONS FOR HOME VIEW */
+/* =========================================================
+   LANGUAGES
+   Used by ProfileView
+   ========================================================= */
+
+export const LANGUAGES = [
+  {
+    code: 'en',
+    name: 'English',
+  },
+  {
+    code: 'sw',
+    name: 'Swahili',
+  },
+  {
+    code: 'fr',
+    name: 'French',
+  },
+  {
+    code: 'es',
+    name: 'Spanish',
+  },
+  {
+    code: 'de',
+    name: 'German',
+  },
+  {
+    code: 'pt',
+    name: 'Portuguese',
+  },
+  {
+    code: 'ar',
+    name: 'Arabic',
+  },
+  {
+    code: 'zh',
+    name: 'Chinese',
+  },
+];
+
+/* =========================================================
+   QUICK ACTIONS
+   Used by HomeView
+   ========================================================= */
+
 export const SUGGESTED_ACTIONS = [
   {
     label: 'Plan my day',
@@ -68,7 +120,11 @@ export const SUGGESTED_ACTIONS = [
   },
 ];
 
-/* LEARNING SUBJECTS */
+/* =========================================================
+   LEARNING SUBJECTS
+   Used by LearnView
+   ========================================================= */
+
 export const LEARNING_SUBJECTS = [
   {
     id: 'languages',
