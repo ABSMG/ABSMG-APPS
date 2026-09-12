@@ -34,10 +34,13 @@ if (path === "/store/login") {
   page = <StoreLogin />;
 } else if (path === "/store/setup") {
   page = <StoreSetupPage />;
+} else if (path === "/store/admin") {
+  page = <StoreAdmin />;
 } else if (path.startsWith("/store")) {
   page = <Storefront />;
-} else {
+} else 
   page = <App />;
+
 }
 
 createRoot(rootElement).render(
