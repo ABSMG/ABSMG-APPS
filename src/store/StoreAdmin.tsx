@@ -9,8 +9,9 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { storeSupabase } from "../lib/storeSupabase";
+import ProductForm from "./ProductForm.tsx";
 
-import ProductForm from "./ProductForm.tsx"; Product = {
+type Product = {
   id: string;
   name: string;
   price: number;
@@ -22,10 +23,14 @@ import ProductForm from "./ProductForm.tsx"; Product = {
 
 export default function StoreAdmin() {
   const [products, setProducts] = useState<Product[]>([]);
-  const [storeName, setStoreName] = useState("OpportunityBridge Store");
+  const [storeName, setStoreName] = useState(
+    "OpportunityBridge Store"
+  );
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-const [showProductForm, setShowProductForm] = useState(false);
+  const [showProductForm, setShowProductForm] =
+    useState(false);
+
   const businessId =
     localStorage.getItem("store_business_id") || "";
 
@@ -177,6 +182,7 @@ const [showProductForm, setShowProductForm] = useState(false);
               className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
             >
               <LogOut size={17} />
+
               <span className="hidden sm:inline">
                 Logout
               </span>
@@ -307,9 +313,7 @@ const [showProductForm, setShowProductForm] = useState(false);
               <button
                 type="button"
                 onClick={() =>
-                  alert(
-                    "Product creation will be connected in the next step."
-                  )
+                  setShowProductForm(true)
                 }
                 className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
               >
@@ -329,6 +333,21 @@ const [showProductForm, setShowProductForm] = useState(false);
             </div>
           </div>
         </section>
+
+        {/* Product Form */}
+        {showProductForm && (
+          <section className="mt-8">
+            <ProductForm
+              onSaved={async () => {
+                setShowProductForm(false);
+                await loadDashboard();
+              }}
+              onCancel={() =>
+                setShowProductForm(false)
+              }
+            />
+          </section>
+        )}
 
         {/* Products */}
         <section className="mt-8 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
