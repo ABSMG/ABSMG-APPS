@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { storeSupabase } from "../lib/storeSupabase";
 
-type Product = {
+import ProductForm from "./ProductForm.tsx"; Product = {
   id: string;
   name: string;
   price: number;
