@@ -25,7 +25,7 @@ export default function StoreAdmin() {
   const [storeName, setStoreName] = useState("OpportunityBridge Store");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-
+const [showProductForm, setShowProductForm] = useState(false);
   const businessId =
     localStorage.getItem("store_business_id") || "";
 
