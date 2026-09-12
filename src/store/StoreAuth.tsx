@@ -16,7 +16,7 @@ export default function StoreAuth({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  async function handleSubmit(event: FormEvent) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setLoading(true);
@@ -35,43 +35,58 @@ export default function StoreAuth({
       return;
     }
 
-    if (mode === "signup") {
-      const { data, error } = await storeSupabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: name,
-          },
-        },
-      });
+    try {
+      if (mode === "signup") {
+        const { data, error } =
+          await storeSupabase.auth.signUp({
+            email,
+            password,
+            options: {
+              data: {
+                full_name: name.trim(),
+              },
+            },
+          });
 
-      if (error) {
-        setError(error.message);
-      } else if (data.session) {
-        setMessage("Account created successfully.");
-        onAuthenticated?.();
-      } else {
+        if (error) {
+          throw error;
+        }
+
+        if (data.session) {
+          window.location.href = "/store/setup";
+          return;
+        }
+
         setMessage(
           "Account created. Check your email to confirm your account."
         );
-      }
-    } else {
-      const { error } =
-        await storeSupabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-      if (error) {
-        setError(error.message);
       } else {
-        setMessage("Login successful.");
+        const { data, error } =
+          await storeSupabase.auth.signInWithPassword({
+            email,
+            password,
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        if (data.session) {
+          window.location.href = "/store/setup";
+          return;
+        }
+
         onAuthenticated?.();
       }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Authentication failed."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
   return (
@@ -82,7 +97,7 @@ export default function StoreAuth({
             🛍️
           </div>
 
-          <h1 className="text-2xl font-bold">
+          <h1 className="text-2xl font-bold text-slate-900">
             {mode === "login"
               ? "Welcome back"
               : "Create your Store account"}
@@ -96,7 +111,7 @@ export default function StoreAuth({
         <form onSubmit={handleSubmit} className="space-y-4">
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
                 Full name
               </label>
 
@@ -104,13 +119,13 @@ export default function StoreAuth({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Your name"
-                className="w-full rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
               />
             </div>
           )}
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
               Email
             </label>
 
@@ -119,13 +134,13 @@ export default function StoreAuth({
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="you@example.com"
-              className="w-full rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
               required
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium">
+            <label className="mb-1 block text-sm font-medium text-slate-700">
               Password
             </label>
 
@@ -137,7 +152,7 @@ export default function StoreAuth({
               }
               placeholder="••••••••"
               minLength={6}
-              className="w-full rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-slate-300"
               required
             />
           </div>
@@ -167,11 +182,12 @@ export default function StoreAuth({
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm">
+        <div className="mt-6 text-center text-sm text-slate-600">
           {mode === "login" ? (
             <p>
               Don't have an account?{" "}
               <button
+                type="button"
                 onClick={() => {
                   setMode("signup");
                   setError("");
@@ -186,10 +202,20 @@ export default function StoreAuth({
             <p>
               Already have an account?{" "}
               <button
+                type="button"
                 onClick={() => {
                   setMode("login");
                   setError("");
                   setMessage("");
                 }}
                 className="font-semibold underline"
-             
+              >
+                Login
+              </button>
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
