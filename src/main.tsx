@@ -5,7 +5,7 @@ import Storefront from "./store/Storefront.tsx";
 import StoreAuth from "./store/StoreAuth.tsx";
 import StoreSetup from "./store/StoreSetup.tsx";
 import "./index.css";
-
+import StoreAdmin from "./store/StoreAdmin.tsx";
 function StoreLogin() {
   return <StoreAuth />;
 }
