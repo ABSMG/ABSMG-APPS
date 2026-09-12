@@ -4,8 +4,9 @@ import App from "./App.tsx";
 import Storefront from "./store/Storefront.tsx";
 import StoreAuth from "./store/StoreAuth.tsx";
 import StoreSetup from "./store/StoreSetup.tsx";
-import "./index.css";
 import StoreAdmin from "./store/StoreAdmin.tsx";
+import "./index.css";
+
 function StoreLogin() {
   return <StoreAuth />;
 }
@@ -38,9 +39,8 @@ if (path === "/store/login") {
   page = <StoreAdmin />;
 } else if (path.startsWith("/store")) {
   page = <Storefront />;
-} else 
+} else {
   page = <App />;
-
 }
 
 createRoot(rootElement).render(
