@@ -3,10 +3,21 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import Storefront from "./store/Storefront.tsx";
 import StoreAuth from "./store/StoreAuth.tsx";
+import StoreSetup from "./store/StoreSetup.tsx";
 import "./index.css";
 
 function StoreLogin() {
   return <StoreAuth />;
+}
+
+function StoreSetupPage() {
+  return (
+    <StoreSetup
+      onComplete={() => {
+        window.location.href = "/store";
+      }}
+    />
+  );
 }
 
 const rootElement = document.getElementById("root");
@@ -21,6 +32,8 @@ let page;
 
 if (path === "/store/login") {
   page = <StoreLogin />;
+} else if (path === "/store/setup") {
+  page = <StoreSetupPage />;
 } else if (path.startsWith("/store")) {
   page = <Storefront />;
 } else {
