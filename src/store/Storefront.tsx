@@ -4,9 +4,9 @@ import {
   ShoppingCart,
   Plus,
   Minus,
-  Trash2,
   X,
-  Sparkles,
+  Store,
+  Loader2,
 } from "lucide-react";
 import { storeSupabase } from "../lib/storeSupabase";
 
@@ -28,7 +28,8 @@ type CartItem = Product & {
   quantity: number;
 };
 
-const BUSINESS_ID = import.meta.env.VITE_STORE_BUSINESS_ID;
+const CART_KEY = "ai_store_cart";
+const BUSINESS_KEY = "store_business_id";
 
 export default function Storefront() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -39,113 +40,127 @@ export default function Storefront() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const businessId =
+    localStorage.getItem(BUSINESS_KEY) || "";
+
   useEffect(() => {
-    const savedCart = localStorage.getItem("ai_store_cart");
+    const savedCart = localStorage.getItem(CART_KEY);
 
     if (savedCart) {
       try {
         setCart(JSON.parse(savedCart));
       } catch {
-        localStorage.removeItem("ai_store_cart");
+        localStorage.removeItem(CART_KEY);
       }
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("ai_store_cart", JSON.stringify(cart));
+    localStorage.setItem(CART_KEY, JSON.stringify(cart));
   }, [cart]);
 
   useEffect(() => {
+    async function loadProducts() {
+      setLoading(true);
+      setError("");
+
+      if (!storeSupabase) {
+        setError("Store database is not configured.");
+        setLoading(false);
+        return;
+      }
+
+      if (!businessId) {
+        setError(
+          "Store has not been set up yet. Please create your store first."
+        );
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error: productsError } =
+          await storeSupabase
+            .from("products")
+            .select(
+              "id,business_id,name,description,price,compare_at_price,stock_quantity,is_active,slug,category,image_url"
+            )
+            .eq("business_id", businessId)
+            .eq("is_active", true)
+            .order("created_at", {
+              ascending: false,
+            });
+
+        if (productsError) {
+          throw productsError;
+        }
+
+        setProducts(data || []);
+      } catch (err) {
+        console.error("Product loading error:", err);
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load products."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
     loadProducts();
-  }, []);
-
-  async function loadProducts() {
-    setLoading(true);
-    setError("");
-
-    if (!storeSupabase) {
-      setError("Store database is not configured.");
-      setLoading(false);
-      return;
-    }
-
-    if (!BUSINESS_ID) {
-      setError("Store business is not configured yet.");
-      setLoading(false);
-      return;
-    }
-
-    const { data, error } = await storeSupabase
-      .from("products")
-      .select(
-        `
-        id,
-        business_id,
-        name,
-        description,
-        price,
-        compare_at_price,
-        stock_quantity,
-        is_active,
-        slug,
-        category,
-        image_url
-        `
-      )
-      .eq("business_id", BUSINESS_ID)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error(error);
-      setError("Failed to load products.");
-      setProducts([]);
-    } else {
-      setProducts((data || []) as Product[]);
-    }
-
-    setLoading(false);
-  }
+  }, [businessId]);
 
   const categories = useMemo(() => {
     const values = products
       .map((product) => product.category)
-      .filter(Boolean) as string[];
+      .filter(
+        (value): value is string =>
+          Boolean(value && value.trim())
+      );
 
     return ["All", ...Array.from(new Set(values))];
   }, [products]);
 
   const filteredProducts = useMemo(() => {
-    const term = search.toLowerCase().trim();
+    const searchTerm = search.trim().toLowerCase();
 
     return products.filter((product) => {
       const matchesSearch =
-        !term ||
-        product.name.toLowerCase().includes(term) ||
-        product.description?.toLowerCase().includes(term);
+        !searchTerm ||
+        product.name.toLowerCase().includes(searchTerm) ||
+        product.description
+          ?.toLowerCase()
+          .includes(searchTerm);
 
       const matchesCategory =
-        category === "All" || product.category === category;
+        category === "All" ||
+        product.category === category;
 
       return matchesSearch && matchesCategory;
     });
   }, [products, search, category]);
-
-  const cartTotal = cart.reduce(
-    (total, item) => total + Number(item.price) * item.quantity,
-    0
-  );
 
   const cartCount = cart.reduce(
     (total, item) => total + item.quantity,
     0
   );
 
+  const cartTotal = cart.reduce(
+    (total, item) => total + item.price * item.quantity,
+    0
+  );
+
   function addToCart(product: Product) {
-    if (product.stock_quantity <= 0) return;
+    if (product.stock_quantity <= 0) {
+      return;
+    }
 
     setCart((current) => {
-      const existing = current.find((item) => item.id === product.id);
+      const existing = current.find(
+        (item) => item.id === product.id
+      );
 
       if (existing) {
         return current.map((item) =>
@@ -161,16 +176,22 @@ export default function Storefront() {
         );
       }
 
-      return [...current, { ...product, quantity: 1 }];
+      return [
+        ...current,
+        {
+          ...product,
+          quantity: 1,
+        },
+      ];
     });
 
     setCartOpen(true);
   }
 
-  function increaseQuantity(id: string) {
+  function increaseQuantity(productId: string) {
     setCart((current) =>
       current.map((item) =>
-        item.id === id
+        item.id === productId
           ? {
               ...item,
               quantity: Math.min(
@@ -183,20 +204,25 @@ export default function Storefront() {
     );
   }
 
-  function decreaseQuantity(id: string) {
+  function decreaseQuantity(productId: string) {
     setCart((current) =>
       current
         .map((item) =>
-          item.id === id
-            ? { ...item, quantity: item.quantity - 1 }
+          item.id === productId
+            ? {
+                ...item,
+                quantity: item.quantity - 1,
+              }
             : item
         )
         .filter((item) => item.quantity > 0)
     );
   }
 
-  function removeFromCart(id: string) {
-    setCart((current) => current.filter((item) => item.id !== id));
+  function removeFromCart(productId: string) {
+    setCart((current) =>
+      current.filter((item) => item.id !== productId)
+    );
   }
 
   function formatPrice(price: number) {
@@ -207,58 +233,39 @@ export default function Storefront() {
     }).format(price);
   }
 
+  function checkout() {
+    if (cart.length === 0) {
+      return;
+    }
+
+    alert(
+      "Checkout will be connected to secure order processing in the next step."
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4">
-          <div>
-            <div className="flex items-center gap-2 text-xl font-bold">
-              <Sparkles className="h-6 w-6" />
-              AI Store
-            </div>
-            <p className="text-xs text-slate-500">
-              Smart products. Simple shopping.
-            </p>
-          </div>
-
-          <button
-            onClick={() => setCartOpen(true)}
-            className="relative rounded-xl border bg-white p-3 shadow-sm transition hover:bg-slate-100"
-            aria-label="Open cart"
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-4">
+          <a
+            href="/store"
+            className="flex items-center gap-2 text-slate-900"
           >
-            <ShoppingCart className="h-5 w-5" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
+              <Store size={20} />
+            </div>
 
-            {cartCount > 0 && (
-              <span className="absolute -right-2 -top-2 flex h-6 min-w-6 items-center justify-center rounded-full bg-black px-1 text-xs font-bold text-white">
-                {cartCount}
-              </span>
-            )}
-          </button>
-        </div>
-      </header>
+            <div>
+              <h1 className="font-bold">
+                OpportunityBridge Store
+              </h1>
+              <p className="hidden text-xs text-slate-500 sm:block">
+                Smart shopping powered by AI
+              </p>
+            </div>
+          </a>
 
-      {/* Hero */}
-      <section className="mx-auto max-w-7xl px-4 pb-8 pt-10">
-        <div className="rounded-3xl bg-slate-900 px-6 py-10 text-white md:px-10">
-          <div className="max-w-2xl">
-            <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Trending products
-            </p>
-
-            <h1 className="text-3xl font-bold md:text-5xl">
-              Discover products worth buying.
-            </h1>
-
-            <p className="mt-4 text-slate-300">
-              Find trending products and shop easily from one place.
-            </p>
-
-            <div className="mt-6 flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-slate-900">
-              <Search className="h-5 w-5 text-slate-400" />
-
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search products..."
-                className="w-full bg-transparent outline-none
+          <div className="relative ml-auto flex-1 md:max-w-xl">
+            <Search
+             
