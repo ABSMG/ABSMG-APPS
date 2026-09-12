@@ -18,7 +18,9 @@ export default function StoreAuth({
 
   async function redirectToStore(userId: string) {
     if (!storeSupabase) {
-      throw new Error("Store database is not configured.");
+      throw new Error(
+        "Store database is not configured. Check the Render environment variables."
+      );
     }
 
     const { data: business, error: businessError } =
@@ -39,13 +41,12 @@ export default function StoreAuth({
         business.id
       );
 
-      window.location.href = "/store/admin";
+      window.location.assign("/store/admin");
       return;
     }
 
     localStorage.removeItem("store_business_id");
-
-    window.location.href = "/store/setup";
+    window.location.assign("/store/setup");
   }
 
   async function handleSubmit(
@@ -53,23 +54,36 @@ export default function StoreAuth({
   ) {
     event.preventDefault();
 
+    if (loading) return;
+
     setLoading(true);
     setError("");
     setMessage("");
 
     if (!storeSupabase) {
-      setError("Store database is not configured.");
+      setError(
+        "Store database is not configured. Please check the Render environment variables."
+      );
       setLoading(false);
       return;
     }
 
-    if (!email.trim() || !password) {
+    const cleanEmail = email.trim();
+    const cleanName = name.trim();
+
+    if (!cleanEmail || !password) {
       setError("Email and password are required.");
       setLoading(false);
       return;
     }
 
-    if (mode === "signup" && !name.trim()) {
+    if (password.length < 6) {
+      setError("Password must contain at least 6 characters.");
+      setLoading(false);
+      return;
+    }
+
+    if (mode === "signup" && !cleanName) {
       setError("Please enter your full name.");
       setLoading(false);
       return;
@@ -77,19 +91,19 @@ export default function StoreAuth({
 
     try {
       if (mode === "signup") {
-        const { data, error } =
+        const { data, error: signupError } =
           await storeSupabase.auth.signUp({
-            email: email.trim(),
+            email: cleanEmail,
             password,
             options: {
               data: {
-                full_name: name.trim(),
+                full_name: cleanName,
               },
             },
           });
 
-        if (error) {
-          throw error;
+        if (signupError) {
+          throw signupError;
         }
 
         if (data.session && data.user) {
@@ -98,32 +112,36 @@ export default function StoreAuth({
         }
 
         setMessage(
-          "Account created successfully. Please check your email and confirm your account before logging in."
+          "Account created successfully. Check your email to confirm your account, then log in."
         );
-      } else {
-        const { data, error } =
-          await storeSupabase.auth.signInWithPassword({
-            email: email.trim(),
-            password,
-          });
 
-        if (error) {
-          throw error;
-        }
-
-        if (!data.session || !data.user) {
-          throw new Error(
-            "Login succeeded, but no active session was created."
-          );
-        }
-
-        await redirectToStore(data.user.id);
+        setMode("login");
+        setPassword("");
         return;
       }
 
-      onAuthenticated?.();
+      const { data, error: loginError } =
+        await storeSupabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
+
+      if (loginError) {
+        throw loginError;
+      }
+
+      if (!data.session || !data.user) {
+        throw new Error(
+          "Login succeeded, but no active session was created."
+        );
+      }
+
+      await redirectToStore(data.user.id);
     } catch (err) {
-      console.error("Store authentication error:", err);
+      console.error(
+        "Store authentication error:",
+        err
+      );
 
       setError(
         err instanceof Error
@@ -133,6 +151,8 @@ export default function StoreAuth({
     } finally {
       setLoading(false);
     }
+
+    onAuthenticated?.();
   }
 
   function switchMode(
@@ -144,164 +164,162 @@ export default function StoreAuth({
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8">
-      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-slate-200 sm:p-8">
-        {/* Header */}
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900 text-white">
-            🛍️
+    <main className="min-h-screen bg-slate-100 px-4 py-8">
+      <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center">
+        <section className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl ring-1 ring-slate-200 sm:p-8">
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-900 text-2xl shadow-lg">
+              🛍️
+            </div>
+
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+              {mode === "login"
+                ? "Welcome back"
+                : "Create your Store account"}
+            </h1>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Manage your AI-powered online store.
+            </p>
           </div>
 
-          <h1 className="text-2xl font-bold text-slate-900">
-            {mode === "login"
-              ? "Welcome back"
-              : "Create your Store account"}
-          </h1>
+          <form
+            onSubmit={handleSubmit}
+            className="space-y-5"
+          >
+            {mode === "signup" && (
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-700">
+                  Full name
+                </label>
 
-          <p className="mt-2 text-sm text-slate-500">
-            Manage your AI-powered online store.
-          </p>
-        </div>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(event) =>
+                    setName(event.target.value)
+                  }
+                  placeholder="Your full name"
+                  autoComplete="name"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
+                  required
+                />
+              </div>
+            )}
 
-        {/* Form */}
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4"
-        >
-          {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Full name
+              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                Email
               </label>
 
               <input
-                type="text"
-                value={name}
+                type="email"
+                value={email}
                 onChange={(event) =>
-                  setName(event.target.value)
+                  setEmail(event.target.value)
                 }
-                placeholder="Your name"
-                autoComplete="name"
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
+                placeholder="you@example.com"
+                autoComplete="email"
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
                 required
               />
             </div>
-          )}
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Email
-            </label>
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                Password
+              </label>
 
-            <input
-              type="email"
-              value={email}
-              onChange={(event) =>
-                setEmail(event.target.value)
-              }
-              placeholder="you@example.com"
-              autoComplete="email"
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
-              required
-            />
-          </div>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) =>
+                  setPassword(event.target.value)
+                }
+                placeholder="Enter your password"
+                autoComplete={
+                  mode === "login"
+                    ? "current-password"
+                    : "new-password"
+                }
+                minLength={6}
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
+                required
+              />
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Password
-            </label>
+              {mode === "signup" && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Password must contain at least 6 characters.
+                </p>
+              )}
+            </div>
 
-            <input
-              type="password"
-              value={password}
-              onChange={(event) =>
-                setPassword(event.target.value)
-              }
-              placeholder="••••••••"
-              autoComplete={
-                mode === "login"
-                  ? "current-password"
-                  : "new-password"
-              }
-              minLength={6}
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-200"
-              required
-            />
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <strong className="font-semibold">
+                  Error:
+                </strong>{" "}
+                {error}
+              </div>
+            )}
 
-            {mode === "signup" && (
-              <p className="mt-1 text-xs text-slate-400">
-                Password must contain at least 6 characters.
+            {message && (
+              <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+                {message}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-xl bg-slate-900 px-4 py-3.5 font-semibold text-white shadow-lg transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading
+                ? mode === "login"
+                  ? "Logging in..."
+                  : "Creating account..."
+                : mode === "login"
+                ? "Login"
+                : "Create account"}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-slate-600">
+            {mode === "login" ? (
+              <p>
+                Don't have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("signup")}
+                  className="font-semibold text-slate-900 underline underline-offset-4 hover:text-slate-600"
+                >
+                  Create one
+                </button>
+              </p>
+            ) : (
+              <p>
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("login")}
+                  className="font-semibold text-slate-900 underline underline-offset-4 hover:text-slate-600"
+                >
+                  Login
+                </button>
               </p>
             )}
           </div>
 
-          {/* Error */}
-          {error && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {error}
-            </div>
-          )}
-
-          {/* Success */}
-          {message && (
-            <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-700">
-              {message}
-            </div>
-          )}
-
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading
-              ? mode === "login"
-                ? "Logging in..."
-                : "Creating account..."
-              : mode === "login"
-              ? "Login"
-              : "Create account"}
-          </button>
-        </form>
-
-        {/* Mode switch */}
-        <div className="mt-6 text-center text-sm text-slate-600">
-          {mode === "login" ? (
-            <p>
-              Don't have an account?{" "}
-              <button
-                type="button"
-                onClick={() => switchMode("signup")}
-                className="font-semibold text-slate-900 underline underline-offset-2"
-              >
-                Create one
-              </button>
-            </p>
-          ) : (
-            <p>
-              Already have an account?{" "}
-              <button
-                type="button"
-                onClick={() => switchMode("login")}
-                className="font-semibold text-slate-900 underline underline-offset-2"
-              >
-                Login
-              </button>
-            </p>
-          )}
-        </div>
-
-        {/* Store link */}
-        <div className="mt-6 border-t border-slate-100 pt-5 text-center">
-          <a
-            href="/store"
-            className="text-sm text-slate-500 hover:text-slate-900"
-          >
-            ← Back to Store
-          </a>
-        </div>
+          <div className="mt-6 border-t border-slate-200 pt-5 text-center">
+            <a
+              href="/store"
+              className="text-sm font-medium text-slate-500 transition hover:text-slate-900"
+            >
+              ← Back to Store
+            </a>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
