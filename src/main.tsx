@@ -1,56 +1,12 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import Storefront from "./store/Storefront.tsx";
 import StoreAuth from "./store/StoreAuth.tsx";
-import { storeSupabase } from "./lib/storeSupabase";
 import "./index.css";
 
-function StoreApp() {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [checking, setChecking] = useState(true);
-
-  useEffect(() => {
-    if (!storeSupabase) {
-      setChecking(false);
-      return;
-    }
-
-    storeSupabase.auth.getSession().then(({ data }) => {
-      setAuthenticated(Boolean(data.session));
-      setChecking(false);
-    });
-
-    const {
-      data: { subscription },
-    } = storeSupabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setAuthenticated(Boolean(session));
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  if (checking) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-slate-500">Loading store...</p>
-      </div>
-    );
-  }
-
-  if (!authenticated) {
-    return (
-      <StoreAuth
-        onAuthenticated={() => setAuthenticated(true)}
-      />
-    );
-  }
-
-  return <Storefront />;
+function StoreLogin() {
+  return <StoreAuth />;
 }
 
 const rootElement = document.getElementById("root");
@@ -59,12 +15,21 @@ if (!rootElement) {
   throw new Error("Application root element was not found.");
 }
 
-const isStoreRoute =
-  window.location.pathname.startsWith("/store");
+const path = window.location.pathname;
+
+let page;
+
+if (path === "/store/login") {
+  page = <StoreLogin />;
+} else if (path.startsWith("/store")) {
+  page = <Storefront />;
+} else {
+  page = <App />;
+}
 
 createRoot(rootElement).render(
   <StrictMode>
-    {isStoreRoute ? <StoreApp /> : <App />}
+    {page}
   </StrictMode>
 );
 
