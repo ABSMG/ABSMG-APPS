@@ -3,7 +3,10 @@ import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-
+import {
+  runAgent,
+  AgentRequest,
+} from './src/agent/agentController';
 dotenv.config();
 
 const app = express();
