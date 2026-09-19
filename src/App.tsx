@@ -723,10 +723,6 @@ export default function App() {
       }, AI_TIMEOUT_MS);
 
     try {
-      /*
-       * Keep only recent conversation
-       * context to avoid oversized requests.
-       */
       const recentHistory =
         nextHistory
           .slice(-MAX_HISTORY)
@@ -742,10 +738,6 @@ export default function App() {
               ),
           }));
 
-      /*
-       * Send recent memories
-       * to the general AI agent.
-       */
       const recentMemories =
         memories
           .slice(
@@ -762,10 +754,6 @@ export default function App() {
               ),
           }));
 
-      /*
-       * Keep user profile
-       * small and safe.
-       */
       const safeProfile = {
         name:
           user?.name || '',
@@ -783,23 +771,6 @@ export default function App() {
           ),
       };
 
-      /*
-       * -----------------------------------------------------
-       * IMPORTANT:
-       *
-       * Nodysom AI now talks to the AGENT endpoint.
-       *
-       * /api/agent
-       *     ↓
-       * agentController
-       *     ↓
-       * tool detection
-       *     ↓
-       * tool execution
-       *     ↓
-       * Gemini
-       * -----------------------------------------------------
-       */
       const response =
         await fetch(
           '/api/agent',
@@ -857,17 +828,6 @@ export default function App() {
       const data =
         await response.json();
 
-      /*
-       * Agent response.
-       *
-       * Expected:
-       * {
-       *   reply: string,
-       *   usedTool: boolean,
-       *   tool?: string,
-       *   toolResult?: string
-       * }
-       */
       const agentReply =
         typeof data.reply ===
           'string' &&
@@ -894,14 +854,6 @@ export default function App() {
               }
             ),
 
-          /*
-           * The current Agent Controller
-           * does not create SmartAction objects.
-           *
-           * Keep compatibility with
-           * existing UI by accepting it
-           * if the backend later provides one.
-           */
           detectedAction:
             data.detectedAction ||
             null,
@@ -920,14 +872,6 @@ export default function App() {
         finalHistory
       );
 
-      /*
-       * -----------------------------------------------------
-       * OPTIONAL MEMORY
-       * -----------------------------------------------------
-       *
-       * If the backend later returns
-       * newMemory, automatically save it.
-       */
       if (
         data.newMemory &&
         typeof data.newMemory ===
@@ -940,26 +884,12 @@ export default function App() {
         );
       }
 
-      /*
-       * -----------------------------------------------------
-       * SMART ACTION
-       * -----------------------------------------------------
-       *
-       * Keep existing compatibility.
-       */
       if (data.detectedAction) {
         setPendingAction(
           data.detectedAction
         );
       }
 
-      /*
-       * Tool information is intentionally
-       * not inserted into the chat text.
-       *
-       * The Agent can use tools silently
-       * and return the final answer.
-       */
       if (
         data.usedTool &&
         data.tool
@@ -1113,35 +1043,35 @@ export default function App() {
 
     const confirmMsg:
       ChatMessage = {
-        id:
-          `msg_c_${Date.now()}`,
+      id:
+        `msg_c_${Date.now()}`,
 
-        role:
-          'assistant',
+      role:
+        'assistant',
 
-        content:
-          `Action confirmed: Added "${finalAction.title}" to your ${
-            finalAction.type ===
-            'REMINDER'
-              ? 'Reminders'
-              : 'Daily Planner'
-          } for ${
-            finalAction.date ||
-            'Today'
-          } at ${
-            finalAction.time ||
-            '09:00 AM'
-          }.`,
+      content:
+        `Action confirmed: Added "${finalAction.title}" to your ${
+          finalAction.type ===
+          'REMINDER'
+            ? 'Reminders'
+            : 'Daily Planner'
+        } for ${
+          finalAction.date ||
+          'Today'
+        } at ${
+          finalAction.time ||
+          '09:00 AM'
+        }.`,
 
-        timestamp:
-          new Date().toLocaleTimeString(
-            [],
-            {
-              hour: '2-digit',
-              minute: '2-digit',
-            }
-          ),
-      };
+      timestamp:
+        new Date().toLocaleTimeString(
+          [],
+          {
+            hour: '2-digit',
+            minute: '2-digit',
+          }
+        ),
+    };
 
     const finalHistory = [
       ...chatHistory,
@@ -1298,11 +1228,9 @@ export default function App() {
                   action
                 )
               }
-              onNavigateTab={(
-                tab
-              ) =>
+              onNavigate={(tab) =>
                 setCurrentTab(
-                  tab
+                  tab as TabType
                 )
               }
             />
