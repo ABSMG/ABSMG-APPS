@@ -12,7 +12,6 @@ import {
 
 import {
   GoogleGenAI,
-  Type,
 } from "@google/genai";
 
 import {
@@ -37,19 +36,20 @@ const PORT =
 
 const AI_TIMEOUT_MS = 30000;
 
-const MAX_MESSAGE_LENGTH = 2000;
+const MAX_MESSAGE_LENGTH = 4000;
 
-const MAX_HISTORY_MESSAGES = 4;
+const MAX_HISTORY_MESSAGES = 6;
 
 const MAX_HISTORY_ITEM_LENGTH = 1200;
 
-const MAX_MEMORY_ITEMS = 6;
+const MAX_MEMORY_ITEMS = 10;
 
 const MAX_MEMORY_LENGTH = 500;
 
-const MAX_QUERY_LENGTH = 1500;
+const MAX_REQUESTS_PER_WINDOW = 60;
 
-const MAX_TOPIC_LENGTH = 500;
+const RATE_LIMIT_WINDOW_MS =
+  60 * 1000;
 
 /* =========================================================
    BODY PARSER
@@ -72,11 +72,6 @@ const rateLimitMap = new Map<
     resetTime: number;
   }
 >();
-
-const RATE_LIMIT_WINDOW_MS =
-  60 * 1000;
-
-const MAX_REQUESTS_PER_WINDOW = 60;
 
 function checkRateLimit(
   req: Request,
@@ -117,12 +112,9 @@ function checkRateLimit(
 
   entry.count++;
 
-  next();
+  return next();
 }
 
-/*
- * Apply rate limiting to all AI/Agent APIs.
- */
 app.use(
   [
     "/api/ai",
@@ -178,7 +170,7 @@ function cleanText(
 }
 
 /* =========================================================
-   AI TIMEOUT
+   TIMEOUT
 ========================================================= */
 
 async function withTimeout<T>(
@@ -216,39 +208,7 @@ async function withTimeout<T>(
 }
 
 /* =========================================================
-   JSON PARSER
-========================================================= */
-
-function parseAIJson(
-  text: string
-): any {
-  const cleaned = text
-    .trim()
-    .replace(
-      /^```json\s*/i,
-      ""
-    )
-    .replace(
-      /^```\s*/i,
-      ""
-    )
-    .replace(
-      /\s*```$/i,
-      ""
-    )
-    .trim();
-
-  try {
-    return JSON.parse(
-      cleaned
-    );
-  } catch {
-    return {};
-  }
-}
-
-/* =========================================================
-   NORMALIZE HISTORY
+   HISTORY
 ========================================================= */
 
 function normalizeHistory(
@@ -278,7 +238,7 @@ function normalizeHistory(
 }
 
 /* =========================================================
-   NORMALIZE MEMORIES
+   MEMORIES
 ========================================================= */
 
 function normalizeMemories(
@@ -300,7 +260,7 @@ function normalizeMemories(
 }
 
 /* =========================================================
-   BUILD AGENT CONTEXT
+   AGENT CONTEXT
 ========================================================= */
 
 function buildAgentContext(
@@ -374,70 +334,77 @@ async function generateAgentAnswer(
 ): Promise<string> {
   const ai = getAI();
 
-  /*
-   * Offline fallback.
-   */
+  /* -------------------------------------------------------
+     OFFLINE MODE
+  ------------------------------------------------------- */
+
   if (!ai) {
     if (toolResult) {
-      return `The tool result is: ${toolResult}`;
+      return (
+        `Tool result: ${toolResult}`
+      );
     }
 
-    return `I heard: "${cleanText(
-      request.message,
-      MAX_MESSAGE_LENGTH
-    )}". Connect a Gemini API key to enable full AI reasoning.`;
+    return (
+      `I received your request: "${cleanText(
+        request.message,
+        MAX_MESSAGE_LENGTH
+      )}". Gemini is not connected yet.`
+    );
   }
 
-  const message = cleanText(
-    request.message,
-    MAX_MESSAGE_LENGTH
-  );
+  const message =
+    cleanText(
+      request.message,
+      MAX_MESSAGE_LENGTH
+    );
 
   const {
     historyText,
     memoryText,
     profileText,
-  } = buildAgentContext(
-    request
-  );
+  } =
+    buildAgentContext(
+      request
+    );
 
-  const toolContext = toolResult
-    ? `
-==================================================
-TOOL RESULT
-==================================================
+  const toolContext =
+    toolResult
+      ? `
+TOOL RESULT:
 
-A tool was executed for this request.
-
-Tool result:
 ${toolResult}
 
-IMPORTANT:
-- Treat the tool result as authoritative for the calculation/action it performed.
-- Do not invent a different result.
-- Explain the result naturally.
+Use this result as authoritative.
+Do not invent a different result.
 `
-    : "";
+      : "";
 
   const systemInstruction = `
-You are Nodysom AI, a general-purpose AI agent.
+You are Nodysom AI.
 
-You are NOT specialized only for scholarships,
-jobs, education, productivity or one particular
-industry.
+You are a general-purpose universal AI agent.
 
-You are a UNIVERSAL GENERAL AI AGENT.
+You are NOT limited to:
+- scholarships
+- jobs
+- education
+- productivity
 
-Your job is to:
-1. Understand the user's intent.
-2. Use available tool results when provided.
-3. Reason about the task.
-4. Give an accurate and useful answer.
-5. Be concise when the question is simple.
-6. Give step-by-step help when the task requires it.
-7. Never claim that you performed an action that you did not perform.
+You can help with many legitimate general tasks.
+
+Your responsibilities:
+
+1. Understand the user's request.
+2. Use available tool results.
+3. Reason carefully.
+4. Give accurate answers.
+5. Be concise for simple questions.
+6. Give step-by-step guidance when useful.
+7. Never claim an action was completed when it was not.
 8. Never invent tool results.
-9. Respect the user's preferred language when possible.
+9. Respect the user's preferred language.
+10. Clearly state uncertainty when information is uncertain.
 
 USER PROFILE:
 ${profileText}
@@ -451,42 +418,60 @@ ${historyText}
 ${toolContext}
 `;
 
-  const response =
-    await withTimeout(
-      ai.models.generateContent({
-        model:
-          "gemini-3.8-flash",
+  try {
+    const response =
+      await withTimeout(
+        ai.models.generateContent({
+          model:
+            "gemini-3.8-flash",
 
-        contents: [
-          {
-            role: "user",
+          contents: [
+            {
+              role: "user",
 
-            parts: [
-              {
-                text: message,
-              },
-            ],
+              parts: [
+                {
+                  text: message,
+                },
+              ],
+            },
+          ],
+
+          config: {
+            systemInstruction,
+
+            responseMimeType:
+              "text/plain",
           },
-        ],
+        })
+      );
 
-        config: {
-          systemInstruction,
+    const answer =
+      response.text?.trim();
 
-          responseMimeType:
-            "text/plain",
-        },
-      })
+    if (!answer) {
+      return (
+        "I am here to help."
+      );
+    }
+
+    return answer;
+  } catch (error: any) {
+    console.error(
+      "[Nodysom AI] Gemini error:",
+      error
     );
 
-  const answer =
-    response.text
-      ?.trim();
+    if (toolResult) {
+      return (
+        `Tool result: ${toolResult}`
+      );
+    }
 
-  if (!answer) {
-    return "I am here to help.";
+    return (
+      "Nodysom AI could not connect to the AI model right now. Please try again."
+    );
   }
-
-  return answer;
 }
 
 /* =========================================================
@@ -495,7 +480,10 @@ ${toolContext}
 
 app.get(
   "/api/health",
-  (req, res) => {
+  (
+    _req,
+    res
+  ) => {
     res.json({
       status: "ok",
 
@@ -505,14 +493,21 @@ app.get(
       tagline:
         "Plan Your Day. Live Smarter.",
 
-      hasGeminiKey: Boolean(
-        process.env.GEMINI_API_KEY &&
-          process.env.GEMINI_API_KEY !==
-            "MY_GEMINI_API_KEY"
-      ),
+      aiProvider:
+        "Google Gemini",
+
+      hasGeminiKey:
+        Boolean(
+          process.env.GEMINI_API_KEY &&
+            process.env.GEMINI_API_KEY !==
+              "MY_GEMINI_API_KEY"
+        ),
 
       agent: {
         enabled: true,
+
+        endpoint:
+          "/api/agent",
 
         tools: [
           "calculator",
@@ -530,7 +525,10 @@ app.get(
 
 app.post(
   "/api/agent",
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const startedAt =
       Date.now();
 
@@ -551,9 +549,6 @@ app.post(
         });
       }
 
-      /*
-       * Build a clean AgentRequest.
-       */
       const agentRequest:
         AgentRequest = {
         message,
@@ -596,30 +591,34 @@ app.post(
           normalizeMemories(
             body.memories
           ).map(
-            (content) => ({
+            (
+              content
+            ) => ({
               content,
             })
           ),
       };
 
       /*
-       * Run:
+       * AGENT LOOP
        *
        * Understand
-       *    ↓
+       *      ↓
        * Plan
-       *    ↓
-       * Tool
-       *    ↓
-       * Verify
-       *    ↓
-       * Gemini
-       *    ↓
-       * Answer
+       *      ↓
+       * Choose Tool
+       *      ↓
+       * Execute
+       *      ↓
+       * Check Result
+       *      ↓
+       * AI Answer
        */
+
       const result =
         await runAgent(
           agentRequest,
+
           async (
             request,
             toolResult
@@ -636,7 +635,7 @@ app.post(
         startedAt;
 
       console.log(
-        `[Nodysom AI Agent] ${latency}ms | tool=${result.tool || "none"}`
+        `[Nodysom Agent] ${latency}ms | tool=${result.tool || "none"}`
       );
 
       return res.json({
@@ -650,7 +649,7 @@ app.post(
         startedAt;
 
       console.error(
-        `[Nodysom AI Agent] Error after ${latency}ms:`,
+        `[Nodysom Agent] Error after ${latency}ms:`,
         error
       );
 
@@ -671,377 +670,181 @@ app.post(
 );
 
 /* =========================================================
-   1. AI ASSISTANT
-   EXISTING COMPATIBILITY ENDPOINT
+   LEGACY AI ASSISTANT
+   Keeps compatibility with older clients.
 ========================================================= */
 
 app.post(
   "/api/ai/assistant",
-  async (req, res) => {
-    const startedAt =
-      Date.now();
-
+  async (
+    req,
+    res
+  ) => {
     try {
-      const {
-        message,
-        history = [],
-        userProfile,
-        memories = [],
-      } = req.body;
+      const body =
+        req.body || {};
 
-      const userMessage =
+      const message =
         cleanText(
-          message,
+          body.message,
           MAX_MESSAGE_LENGTH
         );
 
-      if (!userMessage) {
+      if (!message) {
         return res.status(400).json({
           error:
-            "Message is required",
+            "Message is required.",
         });
       }
 
-      const ai = getAI();
+      const agentRequest:
+        AgentRequest = {
+        message,
 
-      /* =====================================================
-         OFFLINE FALLBACK
-      ===================================================== */
+        history:
+          normalizeHistory(
+            body.history
+          ),
 
-      if (!ai) {
-        return res.json({
-          reply:
-            `I heard: "${userMessage}". Connect a Gemini API key to enable full AI reasoning.`,
+        userProfile:
+          body.userProfile
+            ? {
+                name:
+                  cleanText(
+                    body
+                      .userProfile
+                      ?.name,
+                    100
+                  ),
 
-          detectedAction:
-            parseFallbackAction(
-              userMessage
-            ),
+                preferredLanguage:
+                  cleanText(
+                    body
+                      .userProfile
+                      ?.preferredLanguage,
+                    30
+                  ),
 
-          newMemory: null,
-        });
-      }
+                goals:
+                  cleanText(
+                    body
+                      .userProfile
+                      ?.goals,
+                    500
+                  ),
+              }
+            : undefined,
 
-      /* =====================================================
-         HISTORY
-      ===================================================== */
+        memories:
+          normalizeMemories(
+            body.memories
+          ).map(
+            (
+              content
+            ) => ({
+              content,
+            })
+          ),
+      };
 
-      const recentHistory =
-        normalizeHistory(
-          history
+      const result =
+        await runAgent(
+          agentRequest,
+
+          async (
+            request,
+            toolResult
+          ) => {
+            return generateAgentAnswer(
+              request,
+              toolResult
+            );
+          }
         );
-
-      /* =====================================================
-         MEMORIES
-      ===================================================== */
-
-      const recentMemories =
-        normalizeMemories(
-          memories
-        );
-
-      const memoryContext =
-        recentMemories.length > 0
-          ? `Known user facts: ${recentMemories.join(
-              "; "
-            )}`
-          : "";
-
-      /* =====================================================
-         PROFILE
-      ===================================================== */
-
-      const profileContext =
-        userProfile
-          ? `
-User name: ${cleanText(
-              userProfile.name ||
-                "User",
-              100
-            )}
-
-Language: ${cleanText(
-              userProfile
-                .preferredLanguage ||
-                "en",
-              30
-            )}
-
-Goals: ${cleanText(
-              userProfile.goals ||
-                "general productivity",
-              500
-            )}
-`
-          : "";
-
-      /* =====================================================
-         HISTORY TEXT
-      ===================================================== */
-
-      const historyText =
-        recentHistory.length > 0
-          ? recentHistory
-              .map(
-                (item: any) =>
-                  `${item.role}: ${item.content}`
-              )
-              .join("\n")
-          : "No previous conversation.";
-
-      /* =====================================================
-         SYSTEM INSTRUCTION
-      ===================================================== */
-
-      const systemInstruction = `
-You are Nodysom AI, a fast everyday AI assistant.
-
-Be helpful, direct, accurate, concise and actionable.
-
-${profileContext}
-
-${memoryContext}
-
-Rules:
-1. Answer the user's request directly.
-2. Detect TASK, REMINDER, SCHEDULE or BUDGET actions when appropriate.
-3. If there is no action, use detectedAction type NONE.
-4. Suggest a memory only for important lasting user facts or preferences.
-5. Return valid JSON only.
-`;
-
-      /* =====================================================
-         GEMINI
-      ===================================================== */
-
-      const response =
-        await withTimeout(
-          ai.models.generateContent({
-            model:
-              "gemini-3.8-flash",
-
-            contents: [
-              {
-                role: "user",
-
-                parts: [
-                  {
-                    text: `Recent conversation:
-${historyText}
-
-Current request:
-${userMessage}`,
-                  },
-                ],
-              },
-            ],
-
-            config: {
-              systemInstruction,
-
-              responseMimeType:
-                "application/json",
-
-              responseSchema: {
-                type: Type.OBJECT,
-
-                properties: {
-                  reply: {
-                    type: Type.STRING,
-                  },
-
-                  detectedAction: {
-                    type: Type.OBJECT,
-
-                    properties: {
-                      type: {
-                        type: Type.STRING,
-
-                        description:
-                          "TASK, REMINDER, SCHEDULE, BUDGET, or NONE",
-                      },
-
-                      title: {
-                        type: Type.STRING,
-                      },
-
-                      date: {
-                        type: Type.STRING,
-                      },
-
-                      time: {
-                        type: Type.STRING,
-                      },
-
-                      category: {
-                        type: Type.STRING,
-                      },
-
-                      amount: {
-                        type: Type.NUMBER,
-                      },
-
-                      confirmedRequired: {
-                        type:
-                          Type.BOOLEAN,
-                      },
-                    },
-                  },
-
-                  newMemory: {
-                    type: Type.STRING,
-                  },
-                },
-
-                required: [
-                  "reply",
-                ],
-              },
-            },
-          })
-        );
-
-      const parsed =
-        parseAIJson(
-          response.text ||
-            "{}"
-        );
-
-      const latency =
-        Date.now() -
-        startedAt;
-
-      console.log(
-        `[Nodysom AI Assistant] ${latency}ms`
-      );
 
       return res.json({
         reply:
-          typeof parsed.reply ===
-            "string" &&
-          parsed.reply.trim()
-            ? parsed.reply.trim()
-            : "I am here to help.",
+          result.reply,
 
-        detectedAction:
-          parsed
-            .detectedAction
-            ?.type &&
-          parsed
-            .detectedAction
-            .type !== "NONE"
-            ? parsed.detectedAction
-            : null,
+        usedTool:
+          result.usedTool,
 
-        newMemory:
-          typeof parsed.newMemory ===
-            "string" &&
-          parsed.newMemory.trim()
-            ? parsed.newMemory.trim()
-            : null,
+        tool:
+          result.tool || null,
 
-        latency,
+        toolResult:
+          result.toolResult ||
+          null,
       });
     } catch (error: any) {
-      const latency =
-        Date.now() -
-        startedAt;
-
       console.error(
-        `[Nodysom AI Assistant] Error after ${latency}ms:`,
+        "[Nodysom Assistant] Error:",
         error
       );
 
       return res.status(500).json({
         error:
           error?.message ||
-          "Failed to process request",
+          "Failed to process request.",
 
         reply:
-          "Nodysom AI could not process that right now. Please try again.",
-
-        latency,
+          "Nodysom AI could not process that request right now.",
       });
     }
   }
 );
 
 /* =========================================================
-   2. UNIVERSAL SEARCH
+   SIMPLE SEARCH COMPATIBILITY ENDPOINT
 ========================================================= */
 
 app.post(
   "/api/ai/search",
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     try {
-      const {
-        query,
-        language = "en",
-      } = req.body;
-
-      const searchQuery =
+      const query =
         cleanText(
-          query,
-          MAX_QUERY_LENGTH
+          req.body?.query,
+          1500
         );
 
-      if (!searchQuery) {
+      if (!query) {
         return res.status(400).json({
           error:
-            "Query is required",
+            "Query is required.",
         });
       }
+
+      const language =
+        cleanText(
+          req.body?.language ||
+            "en",
+          30
+        );
 
       const ai = getAI();
 
       if (!ai) {
         return res.json({
           summary:
-            `Search results for: "${searchQuery}".`,
+            `Search request received: "${query}"`,
 
-          verifiedFacts: [
-            "Nodysom AI provides fast AI-powered assistance.",
-          ],
+          verifiedFacts: [],
 
-          estimates: [
-            "Processing time depends on network and AI availability.",
-          ],
+          estimates: [],
 
           uncertainties: [
-            "Cloud connection unavailable.",
+            "AI search service is not connected.",
           ],
 
           sources: [],
 
-          suggestedActions: [
-            "Explore local features",
-            "Add a task to your planner",
-          ],
+          suggestedActions: [],
         });
       }
-
-      const safeLanguage =
-        cleanText(
-          language,
-          30
-        );
-
-      const systemInstruction = `
-You are Nodysom AI Universal Search.
-
-Respond in ${safeLanguage}.
-
-Give concise and useful answers.
-
-Separate:
-- Verified facts
-- Estimates
-- Uncertainties
-
-Never invent information.
-
-Provide useful reputable reference domains when appropriate.
-`;
 
       const response =
         await withTimeout(
@@ -1050,16 +853,122 @@ Provide useful reputable reference domains when appropriate.
               "gemini-3.8-flash",
 
             contents:
-              `Search Query: "${searchQuery}"`,
+              `User search request:
+
+${query}
+
+Respond in ${language}.
+
+Give a concise answer.
+Clearly distinguish known information from uncertainty.
+Do not invent sources.`,
 
             config: {
-              systemInstruction,
-
               responseMimeType:
-                "application/json",
+                "text/plain",
+            },
+          })
+        );
 
-              responseSchema: {
-                type: Type.OBJECT,
+      return res.json({
+        summary:
+          response.text?.trim() ||
+          "No result available.",
 
-                properties: {
-                  summary
+        verifiedFacts: [],
+
+        estimates: [],
+
+        uncertainties: [],
+
+        sources: [],
+
+        suggestedActions: [],
+      });
+    } catch (error: any) {
+      console.error(
+        "[Nodysom Search] Error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          error?.message ||
+          "Search failed.",
+      });
+    }
+  }
+);
+
+/* =========================================================
+   VITE / PRODUCTION SERVER
+========================================================= */
+
+async function startServer() {
+  const isProduction =
+    process.env.NODE_ENV ===
+    "production";
+
+  if (!isProduction) {
+    const vite =
+      await createViteServer({
+        server: {
+          middlewareMode: true,
+        },
+
+        appType: "spa",
+      });
+
+    app.use(
+      vite.middlewares
+    );
+  } else {
+    const distPath =
+      path.resolve(
+        process.cwd(),
+        "dist"
+      );
+
+    app.use(
+      express.static(
+        distPath
+      )
+    );
+
+    app.get(
+      "*",
+      (
+        _req,
+        res
+      ) => {
+        res.sendFile(
+          path.join(
+            distPath,
+            "index.html"
+          )
+        );
+      }
+    );
+  }
+
+  app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+      console.log(
+        `Nodysom AI running on port ${PORT}`
+      );
+    }
+  );
+}
+
+startServer().catch(
+  (error) => {
+    console.error(
+      "Failed to start Nodysom AI:",
+      error
+    );
+
+    process.exit(1);
+  }
+);
