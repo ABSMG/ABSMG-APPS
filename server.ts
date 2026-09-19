@@ -901,6 +901,171 @@ Do not invent sources.`,
 );
 
 /* =========================================================
+   AI TRANSLATION
+========================================================= */
+
+app.post(
+  "/api/ai/translate",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const text = cleanText(
+        req.body?.text,
+        5000
+      );
+
+      const targetLanguage =
+        cleanText(
+          req.body?.targetLanguage ||
+            "en",
+          50
+        );
+
+      const sourceLanguage =
+        cleanText(
+          req.body?.sourceLanguage ||
+            "auto",
+          50
+        );
+
+      if (!text) {
+        return res.status(400).json({
+          error:
+            "Text is required.",
+        });
+      }
+
+      const ai = getAI();
+
+      if (!ai) {
+        return res.status(503).json({
+          error:
+            "Translation AI is not connected.",
+        });
+      }
+
+      const prompt = `
+Translate the following text accurately.
+
+Source language: ${sourceLanguage}
+Target language: ${targetLanguage}
+
+Return ONLY valid JSON with exactly these fields:
+
+{
+  "translatedText": "translation",
+  "phoneticGuide": "optional pronunciation guide, or empty string",
+  "notes": "brief useful translation note, or empty string"
+}
+
+Do not wrap the JSON in markdown fences.
+
+Preserve the original meaning, names, numbers,
+formatting, and tone.
+
+Text:
+
+${text}
+`;
+
+      const response =
+        await withTimeout(
+          ai.models.generateContent({
+            model:
+              "gemini-3.8-flash",
+
+            contents: prompt,
+
+            config: {
+              responseMimeType:
+                "application/json",
+            },
+          })
+        );
+
+      const raw =
+        response.text?.trim() || "";
+
+      let parsed: {
+        translatedText?: unknown;
+        phoneticGuide?: unknown;
+        notes?: unknown;
+      };
+
+      try {
+        parsed =
+          JSON.parse(raw);
+      } catch {
+        const cleaned =
+          raw
+            .replace(
+              /^```json\s*/i,
+              ""
+            )
+            .replace(
+              /^```\s*/i,
+              ""
+            )
+            .replace(
+              /\s*```$/i,
+              ""
+            )
+            .trim();
+
+        parsed =
+          JSON.parse(cleaned);
+      }
+
+      const translatedText =
+        cleanText(
+          parsed.translatedText,
+          10000
+        );
+
+      if (!translatedText) {
+        return res.status(502).json({
+          error:
+            "Translation model returned no translated text.",
+        });
+      }
+
+      return res.json({
+        translatedText,
+
+        phoneticGuide:
+          cleanText(
+            parsed.phoneticGuide,
+            2000
+          ),
+
+        notes:
+          cleanText(
+            parsed.notes,
+            2000
+          ),
+
+        sourceLanguage,
+
+        targetLanguage,
+      });
+    } catch (error: any) {
+      console.error(
+        "[Nodysom Translation] Error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          error?.message ||
+          "Translation failed.",
+      });
+    }
+  }
+);
+
+/* =========================================================
    VITE / PRODUCTION SERVER
 ========================================================= */
 
