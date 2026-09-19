@@ -32,83 +32,126 @@ import { SmartActionModal } from './components/SmartActionModal';
 import { OnboardingModal } from './components/OnboardingModal';
 
 const AI_TIMEOUT_MS = 30000;
-const MAX_HISTORY = 4;
+const MAX_HISTORY = 6;
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_MEMORY_ITEMS = 6;
 const MAX_MEMORY_LENGTH = 500;
 const CLOUD_SYNC_DELAY = 1200;
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<TabType>('home');
+  const [currentTab, setCurrentTab] =
+    useState<TabType>('home');
 
-  const [user, setUser] = useState<UserProfile>(() =>
-    Storage.getUser()
-  );
+  const [user, setUser] =
+    useState<UserProfile>(() =>
+      Storage.getUser()
+    );
 
-  const [memories, setMemories] = useState<MemoryItem[]>(() =>
-    Storage.getMemories()
-  );
+  const [memories, setMemories] =
+    useState<MemoryItem[]>(() =>
+      Storage.getMemories()
+    );
 
-  const [plannerItems, setPlannerItems] = useState<PlannerItem[]>(() =>
-    Storage.getPlannerItems()
-  );
+  const [plannerItems, setPlannerItems] =
+    useState<PlannerItem[]>(() =>
+      Storage.getPlannerItems()
+    );
 
-  const [habits, setHabits] = useState<HabitItem[]>(() =>
-    Storage.getHabits()
-  );
+  const [habits, setHabits] =
+    useState<HabitItem[]>(() =>
+      Storage.getHabits()
+    );
 
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>(() =>
-    Storage.getChatHistory()
-  );
+  const [chatHistory, setChatHistory] =
+    useState<ChatMessage[]>(() =>
+      Storage.getChatHistory()
+    );
 
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  );
+  const [isOnline, setIsOnline] =
+    useState(
+      typeof navigator !== 'undefined'
+        ? navigator.onLine
+        : true
+    );
 
-  const [isPhoneFrame, setIsPhoneFrame] = useState(false);
-  const [isLoadingAI, setIsLoadingAI] = useState(false);
+  const [isPhoneFrame, setIsPhoneFrame] =
+    useState(false);
 
-  const [isVoiceOpen, setIsVoiceOpen] = useState(false);
-  const [isTranslatorOpen, setIsTranslatorOpen] = useState(false);
+  const [isLoadingAI, setIsLoadingAI] =
+    useState(false);
+
+  const [isVoiceOpen, setIsVoiceOpen] =
+    useState(false);
+
+  const [isTranslatorOpen, setIsTranslatorOpen] =
+    useState(false);
+
   const [pendingAction, setPendingAction] =
     useState<SmartAction | null>(null);
 
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState(() => {
-    return !localStorage.getItem('lifeos_onboarding_completed');
-  });
+  const [isOnboardingOpen, setIsOnboardingOpen] =
+    useState(() => {
+      return !localStorage.getItem(
+        'lifeos_onboarding_completed'
+      );
+    });
 
-  // Supabase state
-  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
-  const [cloudEmail, setCloudEmail] = useState('');
-  const [cloudBusy, setCloudBusy] = useState(false);
-  const [cloudReady, setCloudReady] = useState(false);
+  // ---------------------------------------------------------
+  // SUPABASE
+  // ---------------------------------------------------------
 
-  const cloudSyncTimer = useRef<number | null>(null);
+  const [cloudUserId, setCloudUserId] =
+    useState<string | null>(null);
 
-  /*
-   * ---------------------------------------------------------
-   * ONLINE / OFFLINE
-   * ---------------------------------------------------------
-   */
+  const [cloudEmail, setCloudEmail] =
+    useState('');
+
+  const [cloudBusy, setCloudBusy] =
+    useState(false);
+
+  const [cloudReady, setCloudReady] =
+    useState(false);
+
+  const cloudSyncTimer =
+    useRef<number | null>(null);
+
+  // ---------------------------------------------------------
+  // ONLINE / OFFLINE
+  // ---------------------------------------------------------
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    const handleOnline = () =>
+      setIsOnline(true);
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const handleOffline = () =>
+      setIsOnline(false);
+
+    window.addEventListener(
+      'online',
+      handleOnline
+    );
+
+    window.addEventListener(
+      'offline',
+      handleOffline
+    );
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener(
+        'online',
+        handleOnline
+      );
+
+      window.removeEventListener(
+        'offline',
+        handleOffline
+      );
     };
   }, []);
 
-  /*
-   * ---------------------------------------------------------
-   * LOAD SUPABASE SESSION
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // LOAD SUPABASE SESSION
+  // ---------------------------------------------------------
 
   useEffect(() => {
     let mounted = true;
@@ -120,7 +163,8 @@ export default function App() {
       }
 
       try {
-        const session = await getCurrentSession();
+        const session =
+          await getCurrentSession();
 
         if (!mounted) return;
 
@@ -135,7 +179,11 @@ export default function App() {
           setCloudReady(false);
         }
       } catch (error) {
-        console.error('Supabase session error:', error);
+        console.error(
+          'Supabase session error:',
+          error
+        );
+
         if (mounted) {
           setCloudReady(false);
         }
@@ -144,27 +192,32 @@ export default function App() {
 
     loadSession();
 
-    let unsubscribe: (() => void) | undefined;
+    let unsubscribe:
+      | (() => void)
+      | undefined;
 
     if (supabase) {
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (!mounted) return;
+      } = supabase.auth.onAuthStateChange(
+        async (_event, session) => {
+          if (!mounted) return;
 
-        if (session?.user) {
-          await handleCloudLogin(
-            session.user.id,
-            session.user.email || ''
-          );
-        } else {
-          setCloudUserId(null);
-          setCloudEmail('');
-          setCloudReady(false);
+          if (session?.user) {
+            await handleCloudLogin(
+              session.user.id,
+              session.user.email || ''
+            );
+          } else {
+            setCloudUserId(null);
+            setCloudEmail('');
+            setCloudReady(false);
+          }
         }
-      });
+      );
 
-      unsubscribe = () => subscription.unsubscribe();
+      unsubscribe = () =>
+        subscription.unsubscribe();
     }
 
     return () => {
@@ -173,11 +226,9 @@ export default function App() {
     };
   }, []);
 
-  /*
-   * ---------------------------------------------------------
-   * CLOUD LOGIN / LOAD DATA
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // CLOUD LOGIN / LOAD DATA
+  // ---------------------------------------------------------
 
   const handleCloudLogin = async (
     userId: string,
@@ -189,23 +240,48 @@ export default function App() {
     try {
       setCloudBusy(true);
 
-      const cloudData = await loadCloudData(userId);
+      const cloudData =
+        await loadCloudData(userId);
 
       if (cloudData) {
-        // Cloud becomes source of truth when data exists.
         setUser(cloudData.user);
-        setMemories(cloudData.memories || []);
-        setPlannerItems(cloudData.plannerItems || []);
-        setHabits(cloudData.habits || []);
-        setChatHistory(cloudData.chatHistory || []);
 
-        Storage.saveUser(cloudData.user);
-        Storage.saveMemories(cloudData.memories || []);
-        Storage.savePlannerItems(cloudData.plannerItems || []);
-        Storage.saveHabits(cloudData.habits || []);
-        Storage.saveChatHistory(cloudData.chatHistory || []);
+        setMemories(
+          cloudData.memories || []
+        );
+
+        setPlannerItems(
+          cloudData.plannerItems || []
+        );
+
+        setHabits(
+          cloudData.habits || []
+        );
+
+        setChatHistory(
+          cloudData.chatHistory || []
+        );
+
+        Storage.saveUser(
+          cloudData.user
+        );
+
+        Storage.saveMemories(
+          cloudData.memories || []
+        );
+
+        Storage.savePlannerItems(
+          cloudData.plannerItems || []
+        );
+
+        Storage.saveHabits(
+          cloudData.habits || []
+        );
+
+        Storage.saveChatHistory(
+          cloudData.chatHistory || []
+        );
       } else {
-        // First login: upload existing local data.
         await saveCloudData(userId, {
           user,
           memories,
@@ -217,45 +293,62 @@ export default function App() {
 
       setCloudReady(true);
     } catch (error) {
-      console.error('Cloud data load error:', error);
+      console.error(
+        'Cloud data load error:',
+        error
+      );
+
       setCloudReady(false);
     } finally {
       setCloudBusy(false);
     }
   };
 
-  /*
-   * ---------------------------------------------------------
-   * AUTOMATIC CLOUD SYNC
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // AUTOMATIC CLOUD SYNC
+  // ---------------------------------------------------------
 
   useEffect(() => {
-    if (!cloudUserId || !cloudReady || !isSupabaseConfigured) {
+    if (
+      !cloudUserId ||
+      !cloudReady ||
+      !isSupabaseConfigured
+    ) {
       return;
     }
 
     if (cloudSyncTimer.current) {
-      window.clearTimeout(cloudSyncTimer.current);
+      window.clearTimeout(
+        cloudSyncTimer.current
+      );
     }
 
-    cloudSyncTimer.current = window.setTimeout(async () => {
-      try {
-        await saveCloudData(cloudUserId, {
-          user,
-          memories,
-          plannerItems,
-          habits,
-          chatHistory,
-        });
-      } catch (error) {
-        console.error('Cloud sync error:', error);
-      }
-    }, CLOUD_SYNC_DELAY);
+    cloudSyncTimer.current =
+      window.setTimeout(async () => {
+        try {
+          await saveCloudData(
+            cloudUserId,
+            {
+              user,
+              memories,
+              plannerItems,
+              habits,
+              chatHistory,
+            }
+          );
+        } catch (error) {
+          console.error(
+            'Cloud sync error:',
+            error
+          );
+        }
+      }, CLOUD_SYNC_DELAY);
 
     return () => {
       if (cloudSyncTimer.current) {
-        window.clearTimeout(cloudSyncTimer.current);
+        window.clearTimeout(
+          cloudSyncTimer.current
+        );
       }
     };
   }, [
@@ -268,11 +361,9 @@ export default function App() {
     chatHistory,
   ]);
 
-  /*
-   * ---------------------------------------------------------
-   * AUTH ACTIONS
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // AUTH ACTIONS
+  // ---------------------------------------------------------
 
   const handleCloudSignIn = async (
     email: string,
@@ -281,14 +372,20 @@ export default function App() {
     setCloudBusy(true);
 
     try {
-      const { data, error } = await signIn(email, password);
+      const { data, error } =
+        await signIn(
+          email,
+          password
+        );
 
       if (error) {
         throw error;
       }
 
       if (!data.user) {
-        throw new Error('Login failed.');
+        throw new Error(
+          'Login failed.'
+        );
       }
 
       await handleCloudLogin(
@@ -298,10 +395,14 @@ export default function App() {
 
       return {
         success: true,
-        message: 'Login successful.',
+        message:
+          'Login successful.',
       };
     } catch (error: any) {
-      console.error('Sign in error:', error);
+      console.error(
+        'Sign in error:',
+        error
+      );
 
       return {
         success: false,
@@ -321,7 +422,11 @@ export default function App() {
     setCloudBusy(true);
 
     try {
-      const { data, error } = await signUp(email, password);
+      const { data, error } =
+        await signUp(
+          email,
+          password
+        );
 
       if (error) {
         throw error;
@@ -330,12 +435,14 @@ export default function App() {
       if (data.session?.user) {
         await handleCloudLogin(
           data.session.user.id,
-          data.session.user.email || email
+          data.session.user.email ||
+            email
         );
 
         return {
           success: true,
-          message: 'Account created successfully.',
+          message:
+            'Account created successfully.',
         };
       }
 
@@ -345,7 +452,10 @@ export default function App() {
           'Account created. Please check your email to confirm your account.',
       };
     } catch (error: any) {
-      console.error('Sign up error:', error);
+      console.error(
+        'Sign up error:',
+        error
+      );
 
       return {
         success: false,
@@ -358,27 +468,29 @@ export default function App() {
     }
   };
 
-  const handleCloudSignOut = async () => {
-    setCloudBusy(true);
+  const handleCloudSignOut =
+    async () => {
+      setCloudBusy(true);
 
-    try {
-      await signOut();
+      try {
+        await signOut();
 
-      setCloudUserId(null);
-      setCloudEmail('');
-      setCloudReady(false);
-    } catch (error) {
-      console.error('Sign out error:', error);
-    } finally {
-      setCloudBusy(false);
-    }
-  };
+        setCloudUserId(null);
+        setCloudEmail('');
+        setCloudReady(false);
+      } catch (error) {
+        console.error(
+          'Sign out error:',
+          error
+        );
+      } finally {
+        setCloudBusy(false);
+      }
+    };
 
-  /*
-   * ---------------------------------------------------------
-   * USER
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // USER
+  // ---------------------------------------------------------
 
   const handleUpdateUser = (
     updated: Partial<UserProfile>
@@ -389,43 +501,61 @@ export default function App() {
     };
 
     setUser(nextUser);
-    Storage.saveUser(nextUser);
+
+    Storage.saveUser(
+      nextUser
+    );
   };
 
-  /*
-   * ---------------------------------------------------------
-   * PLANNER
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // PLANNER
+  // ---------------------------------------------------------
 
-  const handleToggleTask = (id: string) => {
-    const updated = plannerItems.map((item) =>
-      item.id === id
-        ? {
-            ...item,
-            completed: !item.completed,
-          }
-        : item
-    );
+  const handleToggleTask = (
+    id: string
+  ) => {
+    const updated =
+      plannerItems.map(
+        (item) =>
+          item.id === id
+            ? {
+                ...item,
+                completed:
+                  !item.completed,
+              }
+            : item
+      );
 
     setPlannerItems(updated);
-    Storage.savePlannerItems(updated);
+
+    Storage.savePlannerItems(
+      updated
+    );
   };
 
   const handleAddTask = (
     item: Omit<PlannerItem, 'id'>
   ) => {
-    const category = item.category?.trim();
+    const category =
+      item.category?.trim();
 
     let tags = (item.tags || [])
       .map((t) => t.trim())
       .filter(Boolean);
 
-    if (category && !tags.includes(category)) {
-      tags = [category, ...tags];
+    if (
+      category &&
+      !tags.includes(category)
+    ) {
+      tags = [
+        category,
+        ...tags,
+      ];
     }
 
-    tags = Array.from(new Set(tags));
+    tags = Array.from(
+      new Set(tags)
+    );
 
     const newItem: PlannerItem = {
       ...item,
@@ -443,43 +573,51 @@ export default function App() {
     ];
 
     setPlannerItems(updated);
-    Storage.savePlannerItems(updated);
+
+    Storage.savePlannerItems(
+      updated
+    );
   };
 
-  /*
-   * ---------------------------------------------------------
-   * HABITS
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // HABITS
+  // ---------------------------------------------------------
 
-  const handleToggleHabit = (id: string) => {
-    const updated = habits.map((habit) => {
-      if (habit.id !== id) return habit;
+  const handleToggleHabit = (
+    id: string
+  ) => {
+    const updated =
+      habits.map((habit) => {
+        if (habit.id !== id) {
+          return habit;
+        }
 
-      const nextState =
-        !habit.completedToday;
+        const nextState =
+          !habit.completedToday;
 
-      return {
-        ...habit,
-        completedToday: nextState,
-        streak: nextState
-          ? habit.streak + 1
-          : Math.max(
-              0,
-              habit.streak - 1
-            ),
-      };
-    });
+        return {
+          ...habit,
+          completedToday:
+            nextState,
+          streak: nextState
+            ? habit.streak + 1
+            : Math.max(
+                0,
+                habit.streak - 1
+              ),
+        };
+      });
 
     setHabits(updated);
-    Storage.saveHabits(updated);
+
+    Storage.saveHabits(
+      updated
+    );
   };
 
-  /*
-   * ---------------------------------------------------------
-   * MEMORY
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // MEMORY
+  // ---------------------------------------------------------
 
   const handleAddMemory = (
     content: string,
@@ -488,7 +626,9 @@ export default function App() {
     const cleanContent =
       content.trim();
 
-    if (!cleanContent) return;
+    if (!cleanContent) {
+      return;
+    }
 
     const newMem: MemoryItem = {
       id: `mem_${Date.now()}`,
@@ -506,7 +646,10 @@ export default function App() {
     ];
 
     setMemories(updated);
-    Storage.saveMemories(updated);
+
+    Storage.saveMemories(
+      updated
+    );
   };
 
   const handleDeleteMemory = (
@@ -519,14 +662,15 @@ export default function App() {
       );
 
     setMemories(updated);
-    Storage.saveMemories(updated);
+
+    Storage.saveMemories(
+      updated
+    );
   };
 
-  /*
-   * ---------------------------------------------------------
-   * AI
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // AI AGENT
+  // ---------------------------------------------------------
 
   const handleSendMessage = async (
     text: string
@@ -560,8 +704,14 @@ export default function App() {
       userMsg,
     ];
 
-    setChatHistory(nextHistory);
-    Storage.saveChatHistory(nextHistory);
+    setChatHistory(
+      nextHistory
+    );
+
+    Storage.saveChatHistory(
+      nextHistory
+    );
+
     setIsLoadingAI(true);
 
     const controller =
@@ -573,16 +723,29 @@ export default function App() {
       }, AI_TIMEOUT_MS);
 
     try {
+      /*
+       * Keep only recent conversation
+       * context to avoid oversized requests.
+       */
       const recentHistory =
         nextHistory
           .slice(-MAX_HISTORY)
           .map((message) => ({
-            role: message.role,
-            content: String(
-              message.content || ''
-            ).slice(0, 1200),
+            role:
+              message.role,
+            content:
+              String(
+                message.content || ''
+              ).slice(
+                0,
+                1200
+              ),
           }));
 
+      /*
+       * Send recent memories
+       * to the general AI agent.
+       */
       const recentMemories =
         memories
           .slice(
@@ -590,45 +753,80 @@ export default function App() {
             MAX_MEMORY_ITEMS
           )
           .map((memory) => ({
-            content: String(
-              memory.content || ''
-            ).slice(
-              0,
-              MAX_MEMORY_LENGTH
-            ),
+            content:
+              String(
+                memory.content || ''
+              ).slice(
+                0,
+                MAX_MEMORY_LENGTH
+              ),
           }));
 
+      /*
+       * Keep user profile
+       * small and safe.
+       */
       const safeProfile = {
-        name: user?.name || '',
+        name:
+          user?.name || '',
+
         preferredLanguage:
           user?.preferredLanguage ||
           'en',
-        goals: String(
-          user?.goals || ''
-        ).slice(0, 500),
+
+        goals:
+          String(
+            user?.goals || ''
+          ).slice(
+            0,
+            500
+          ),
       };
 
+      /*
+       * -----------------------------------------------------
+       * IMPORTANT:
+       *
+       * Nodysom AI now talks to the AGENT endpoint.
+       *
+       * /api/agent
+       *     ↓
+       * agentController
+       *     ↓
+       * tool detection
+       *     ↓
+       * tool execution
+       *     ↓
+       * Gemini
+       * -----------------------------------------------------
+       */
       const response =
         await fetch(
-          '/api/ai/assistant',
+          '/api/agent',
           {
             method: 'POST',
+
             headers: {
               'Content-Type':
                 'application/json',
             },
+
             signal:
               controller.signal,
+
             body: JSON.stringify({
               message:
                 cleanText.slice(
                   0,
                   MAX_MESSAGE_LENGTH
                 ),
+
               history:
                 recentHistory,
+
               userProfile:
                 safeProfile,
+
               memories:
                 recentMemories,
             }),
@@ -637,7 +835,7 @@ export default function App() {
 
       if (!response.ok) {
         let serverMessage =
-          'AI request failed.';
+          'AI Agent request failed.';
 
         try {
           const errorData =
@@ -648,7 +846,7 @@ export default function App() {
             errorData?.reply ||
             serverMessage;
         } catch {
-          // Ignore invalid response.
+          // Ignore invalid JSON.
         }
 
         throw new Error(
@@ -659,27 +857,55 @@ export default function App() {
       const data =
         await response.json();
 
-      const assistantMsg: ChatMessage = {
-        id: `msg_a_${Date.now()}`,
-        role: 'assistant',
-        content:
-          typeof data.reply ===
-            'string' &&
-          data.reply.trim()
-            ? data.reply.trim()
-            : 'I processed your request.',
-        timestamp:
-          new Date().toLocaleTimeString(
-            [],
-            {
-              hour: '2-digit',
-              minute: '2-digit',
-            }
-          ),
-        detectedAction:
-          data.detectedAction ||
-          null,
-      };
+      /*
+       * Agent response.
+       *
+       * Expected:
+       * {
+       *   reply: string,
+       *   usedTool: boolean,
+       *   tool?: string,
+       *   toolResult?: string
+       * }
+       */
+      const agentReply =
+        typeof data.reply ===
+          'string' &&
+        data.reply.trim()
+          ? data.reply.trim()
+          : 'I processed your request.';
+
+      const assistantMsg:
+        ChatMessage = {
+          id: `msg_a_${Date.now()}`,
+
+          role:
+            'assistant',
+
+          content:
+            agentReply,
+
+          timestamp:
+            new Date().toLocaleTimeString(
+              [],
+              {
+                hour: '2-digit',
+                minute: '2-digit',
+              }
+            ),
+
+          /*
+           * The current Agent Controller
+           * does not create SmartAction objects.
+           *
+           * Keep compatibility with
+           * existing UI by accepting it
+           * if the backend later provides one.
+           */
+          detectedAction:
+            data.detectedAction ||
+            null,
+        };
 
       const finalHistory = [
         ...nextHistory,
@@ -694,6 +920,14 @@ export default function App() {
         finalHistory
       );
 
+      /*
+       * -----------------------------------------------------
+       * OPTIONAL MEMORY
+       * -----------------------------------------------------
+       *
+       * If the backend later returns
+       * newMemory, automatically save it.
+       */
       if (
         data.newMemory &&
         typeof data.newMemory ===
@@ -706,14 +940,47 @@ export default function App() {
         );
       }
 
+      /*
+       * -----------------------------------------------------
+       * SMART ACTION
+       * -----------------------------------------------------
+       *
+       * Keep existing compatibility.
+       */
       if (data.detectedAction) {
         setPendingAction(
           data.detectedAction
         );
       }
+
+      /*
+       * Tool information is intentionally
+       * not inserted into the chat text.
+       *
+       * The Agent can use tools silently
+       * and return the final answer.
+       */
+      if (
+        data.usedTool &&
+        data.tool
+      ) {
+        console.log(
+          'Agent tool used:',
+          data.tool
+        );
+
+        if (
+          data.toolResult
+        ) {
+          console.log(
+            'Tool result:',
+            data.toolResult
+          );
+        }
+      }
     } catch (error: any) {
       console.error(
-        'Nodysom AI error:',
+        'Nodysom AI Agent error:',
         error
       );
 
@@ -731,21 +998,32 @@ export default function App() {
       ) {
         errorText =
           'You are offline. Please check your internet connection and try again.';
+      } else if (
+        error?.message
+      ) {
+        errorText =
+          error.message;
       }
 
-      const errorMsg: ChatMessage = {
-        id: `msg_err_${Date.now()}`,
-        role: 'assistant',
-        content: errorText,
-        timestamp:
-          new Date().toLocaleTimeString(
-            [],
-            {
-              hour: '2-digit',
-              minute: '2-digit',
-            }
-          ),
-      };
+      const errorMsg:
+        ChatMessage = {
+          id: `msg_err_${Date.now()}`,
+
+          role:
+            'assistant',
+
+          content:
+            errorText,
+
+          timestamp:
+            new Date().toLocaleTimeString(
+              [],
+              {
+                hour: '2-digit',
+                minute: '2-digit',
+              }
+            ),
+        };
 
       const errorHistory = [
         ...nextHistory,
@@ -768,11 +1046,9 @@ export default function App() {
     }
   };
 
-  /*
-   * ---------------------------------------------------------
-   * SMART ACTION
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // SMART ACTION
+  // ---------------------------------------------------------
 
   const handleConfirmSmartAction = (
     finalAction: SmartAction
@@ -781,65 +1057,91 @@ export default function App() {
       finalAction.category ||
       'General';
 
-    const newItem: PlannerItem = {
-      id: `action_${Date.now()}`,
-      title:
-        finalAction.title,
-      type:
-        finalAction.type ===
-        'REMINDER'
-          ? 'reminder'
-          : 'task',
-      date:
-        finalAction.date ||
-        new Date()
-          .toISOString()
-          .split('T')[0],
-      time:
-        finalAction.time ||
-        '09:00 AM',
-      completed: false,
-      priority: 'high',
-      category,
-      tags: [category],
-    };
+    const newItem:
+      PlannerItem = {
+        id:
+          `action_${Date.now()}`,
+
+        title:
+          finalAction.title,
+
+        type:
+          finalAction.type ===
+          'REMINDER'
+            ? 'reminder'
+            : 'task',
+
+        date:
+          finalAction.date ||
+          new Date()
+            .toISOString()
+            .split('T')[0],
+
+        time:
+          finalAction.time ||
+          '09:00 AM',
+
+        completed:
+          false,
+
+        priority:
+          'high',
+
+        category,
+
+        tags: [
+          category,
+        ],
+      };
 
     const updated = [
       newItem,
       ...plannerItems,
     ];
 
-    setPlannerItems(updated);
+    setPlannerItems(
+      updated
+    );
+
     Storage.savePlannerItems(
       updated
     );
 
-    setPendingAction(null);
+    setPendingAction(
+      null
+    );
 
-    const confirmMsg: ChatMessage = {
-      id: `msg_c_${Date.now()}`,
-      role: 'assistant',
-      content: `Action confirmed: Added "${finalAction.title}" to your ${
-        finalAction.type ===
-        'REMINDER'
-          ? 'Reminders'
-          : 'Daily Planner'
-      } for ${
-        finalAction.date ||
-        'Today'
-      } at ${
-        finalAction.time ||
-        '09:00 AM'
-      }.`,
-      timestamp:
-        new Date().toLocaleTimeString(
-          [],
-          {
-            hour: '2-digit',
-            minute: '2-digit',
-          }
-        ),
-    };
+    const confirmMsg:
+      ChatMessage = {
+        id:
+          `msg_c_${Date.now()}`,
+
+        role:
+          'assistant',
+
+        content:
+          `Action confirmed: Added "${finalAction.title}" to your ${
+            finalAction.type ===
+            'REMINDER'
+              ? 'Reminders'
+              : 'Daily Planner'
+          } for ${
+            finalAction.date ||
+            'Today'
+          } at ${
+            finalAction.time ||
+            '09:00 AM'
+          }.`,
+
+        timestamp:
+          new Date().toLocaleTimeString(
+            [],
+            {
+              hour: '2-digit',
+              minute: '2-digit',
+            }
+          ),
+      };
 
     const finalHistory = [
       ...chatHistory,
@@ -855,69 +1157,68 @@ export default function App() {
     );
   };
 
-  /*
-   * ---------------------------------------------------------
-   * ONBOARDING
-   * ---------------------------------------------------------
-   */
+  // ---------------------------------------------------------
+  // ONBOARDING
+  // ---------------------------------------------------------
 
-  const handleCompleteOnboarding = (
-    updatedProfile: Partial<UserProfile>,
-    initialPrompt?: string
-  ) => {
-    handleUpdateUser(
-      updatedProfile
-    );
-
-    localStorage.setItem(
-      'lifeos_onboarding_completed',
-      'true'
-    );
-
-    setIsOnboardingOpen(false);
-
-    if (initialPrompt) {
-      handleSendMessage(
-        initialPrompt
+  const handleCompleteOnboarding =
+    (
+      updatedProfile:
+        Partial<UserProfile>,
+      initialPrompt?: string
+    ) => {
+      handleUpdateUser(
+        updatedProfile
       );
-    }
-  };
 
-  /*
-   * ---------------------------------------------------------
-   * CLEAR DATA
-   * ---------------------------------------------------------
-   */
+      localStorage.setItem(
+        'lifeos_onboarding_completed',
+        'true'
+      );
 
-  const handleClearAllData = () => {
-    Storage.clearAllData();
+      setIsOnboardingOpen(
+        false
+      );
 
-    setUser(
-      Storage.getUser()
-    );
+      if (initialPrompt) {
+        handleSendMessage(
+          initialPrompt
+        );
+      }
+    };
 
-    setMemories(
-      Storage.getMemories()
-    );
+  // ---------------------------------------------------------
+  // CLEAR DATA
+  // ---------------------------------------------------------
 
-    setPlannerItems(
-      Storage.getPlannerItems()
-    );
+  const handleClearAllData =
+    () => {
+      Storage.clearAllData();
 
-    setHabits(
-      Storage.getHabits()
-    );
+      setUser(
+        Storage.getUser()
+      );
 
-    setChatHistory(
-      Storage.getChatHistory()
-    );
-  };
+      setMemories(
+        Storage.getMemories()
+      );
 
-  /*
-   * ---------------------------------------------------------
-   * UI
-   * ---------------------------------------------------------
-   */
+      setPlannerItems(
+        Storage.getPlannerItems()
+      );
+
+      setHabits(
+        Storage.getHabits()
+      );
+
+      setChatHistory(
+        Storage.getChatHistory()
+      );
+    };
+
+  // ---------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------
 
   return (
     <div
@@ -937,6 +1238,7 @@ export default function App() {
         {isPhoneFrame && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4 bg-slate-900 rounded-full z-40 flex items-center justify-center">
             <div className="w-10 h-1 bg-slate-800 rounded-full" />
+
             <div className="w-2.5 h-2.5 rounded-full bg-slate-950 ml-2 border border-slate-800" />
           </div>
         )}
@@ -944,14 +1246,18 @@ export default function App() {
         <TopHeader
           user={user}
           isOnline={isOnline}
-          isPhoneFrame={isPhoneFrame}
+          isPhoneFrame={
+            isPhoneFrame
+          }
           onTogglePhoneFrame={() =>
             setIsPhoneFrame(
               !isPhoneFrame
             )
           }
           onOpenVoice={() =>
-            setIsVoiceOpen(true)
+            setIsVoiceOpen(
+              true
+            )
           }
           onOpenTranslator={() =>
             setIsTranslatorOpen(
@@ -961,7 +1267,8 @@ export default function App() {
         />
 
         <main className="flex-1 overflow-y-auto">
-          {currentTab === 'home' && (
+          {currentTab ===
+            'home' && (
             <HomeView
               user={user}
               chatHistory={
@@ -1021,7 +1328,8 @@ export default function App() {
             />
           )}
 
-          {currentTab === 'learn' && (
+          {currentTab ===
+            'learn' && (
             <LearnView />
           )}
 
@@ -1048,7 +1356,9 @@ export default function App() {
             'profile' && (
             <ProfileView
               user={user}
-              memories={memories}
+              memories={
+                memories
+              }
               onUpdateUser={
                 handleUpdateUser
               }
@@ -1065,22 +1375,26 @@ export default function App() {
                 handleClearAllData
               }
 
-              /* Cloud account props */
               cloudEnabled={
                 isSupabaseConfigured
               }
+
               cloudEmail={
                 cloudEmail
               }
+
               cloudBusy={
                 cloudBusy
               }
+
               onSignIn={
                 handleCloudSignIn
               }
+
               onSignUp={
                 handleCloudSignUp
               }
+
               onSignOut={
                 handleCloudSignOut
               }
@@ -1096,7 +1410,9 @@ export default function App() {
             setCurrentTab(tab)
           }
           onOpenVoice={() =>
-            setIsVoiceOpen(true)
+            setIsVoiceOpen(
+              true
+            )
           }
           user={user}
           isOnline={isOnline}
@@ -1116,9 +1432,13 @@ export default function App() {
         />
 
         <VoiceAssistantModal
-          isOpen={isVoiceOpen}
+          isOpen={
+            isVoiceOpen
+          }
           onClose={() =>
-            setIsVoiceOpen(false)
+            setIsVoiceOpen(
+              false
+            )
           }
           onSubmitVoicePrompt={(
             prompt
@@ -1155,7 +1475,9 @@ export default function App() {
             handleConfirmSmartAction
           }
           onCancel={() =>
-            setPendingAction(null)
+            setPendingAction(
+              null
+            )
           }
         />
 
