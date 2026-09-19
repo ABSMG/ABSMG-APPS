@@ -112,6 +112,72 @@ const DEFAULT_SCHEDULE: ScheduleBlock[] = [
   },
 ];
 
+const getLocalISODate = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+};
+
+const sanitizeSchedule = (value: unknown): ScheduleBlock[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        typeof item === 'object' &&
+        item !== null
+    )
+    .map((item) => {
+      const rawDuration = Number(item.durationMinutes);
+
+      const durationMinutes =
+        Number.isFinite(rawDuration) && rawDuration > 0
+          ? Math.min(1440, Math.round(rawDuration))
+          : undefined;
+
+      const time =
+        typeof item.time === 'string'
+          ? item.time.trim()
+          : '';
+
+      const title =
+        typeof item.title === 'string'
+          ? item.title.trim()
+          : '';
+
+      const category =
+        typeof item.category === 'string' &&
+        item.category.trim()
+          ? item.category.trim()
+          : 'General';
+
+      const notes =
+        typeof item.notes === 'string'
+          ? item.notes.trim()
+          : '';
+
+      return {
+        time,
+        title,
+        category,
+        ...(durationMinutes
+          ? { durationMinutes }
+          : {}),
+        ...(notes ? { notes } : {}),
+      };
+    })
+    .filter(
+      (item) =>
+        item.time.length > 0 &&
+        item.title.length > 0
+    )
+    .slice(0, 12);
+};
+
 export const PlannerView: React.FC<PlannerViewProps> = ({
   plannerItems,
   habits,
@@ -123,11 +189,17 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     'schedule' | 'tasks' | 'habits'
   >('schedule');
 
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGenerating, setIsGenerating] =
+    useState(false);
 
-  const [schedulePrompt, setSchedulePrompt] = useState('');
+  const [schedulePrompt, setSchedulePrompt] =
+    useState('');
 
-  const [scheduleError, setScheduleError] = useState('');
+  const [scheduleError, setScheduleError] =
+    useState('');
+
+  const [scheduleSuccess, setScheduleSuccess] =
+    useState('');
 
   const [generatedSchedule, setGeneratedSchedule] =
     useState<ScheduleBlock[]>(DEFAULT_SCHEDULE);
@@ -135,44 +207,43 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   const [selectedFilterTag, setSelectedFilterTag] =
     useState<string | null>(null);
 
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [showAddModal, setShowAddModal] =
+    useState(false);
 
-  const [newTitle, setNewTitle] = useState('');
+  const [newTitle, setNewTitle] =
+    useState('');
 
   const [newType, setNewType] =
     useState<'task' | 'reminder'>('task');
 
-  const [newTime, setNewTime] = useState('09:00 AM');
+  const [newTime, setNewTime] =
+    useState('09:00 AM');
 
   const [newPriority, setNewPriority] =
-    useState<'low' | 'normal' | 'high'>('normal');
+    useState<'low' | 'normal' | 'high'>(
+      'normal'
+    );
 
   const [selectedTags, setSelectedTags] =
     useState<string[]>(['Work']);
 
-  const [customTagInput, setCustomTagInput] = useState('');
+  const [customTagInput, setCustomTagInput] =
+    useState('');
 
   const today = new Date();
 
-  const formattedDate = today.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  });
+  const formattedDate =
+    today.toLocaleDateString(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    });
 
-  /*
-   * Use local calendar date instead of toISOString().
-   * This prevents timezone-related date shifts.
-   */
-  const todayISO = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, '0'),
-    String(today.getDate()).padStart(2, '0'),
-  ].join('-');
+  const todayISO = getLocalISODate(today);
 
-  /* -----------------------------
+  /* =========================
      AI SMART SCHEDULER
-  ----------------------------- */
+  ========================== */
 
   const handleGenerateSchedule = async () => {
     const prompt = schedulePrompt.trim();
@@ -183,6 +254,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
     setIsGenerating(true);
     setScheduleError('');
+    setScheduleSuccess('');
 
     try {
       const response = await fetch(
@@ -199,101 +271,116 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
         }
       );
 
-      let data: any = {};
+      const rawResponse =
+        await response.text();
 
-      try {
-        data = await response.json();
-      } catch {
-        data = {};
+      let data: unknown = null;
+
+      if (rawResponse.trim()) {
+        try {
+          data = JSON.parse(rawResponse);
+        } catch {
+          throw new Error(
+            'Nodysom AI returned an invalid response. Please try again.'
+          );
+        }
       }
+
+      const responseData =
+        data &&
+        typeof data === 'object'
+          ? (data as Record<string, unknown>)
+          : null;
 
       if (!response.ok) {
+        const serverError =
+          typeof responseData?.error === 'string'
+            ? responseData.error
+            : `Schedule generation failed (HTTP ${response.status}).`;
+
+        throw new Error(serverError);
+      }
+
+      const safeSchedule =
+        sanitizeSchedule(
+          responseData?.schedule
+        );
+
+      if (safeSchedule.length === 0) {
         throw new Error(
-          data?.error ||
-            `Schedule generation failed (${response.status}).`
+          'Nodysom AI did not return a valid schedule. Try describing your day with more details.'
         );
       }
 
-      const rawSchedule = Array.isArray(data?.schedule)
-        ? data.schedule
-        : [];
+      setGeneratedSchedule(
+        safeSchedule
+      );
 
-      /*
-       * Validate and sanitize AI output before
-       * allowing it into the UI.
-       */
-      const validSchedule: ScheduleBlock[] =
-        rawSchedule
-          .filter(
-            (item: any) =>
-              item &&
-              typeof item.title === 'string' &&
-              item.title.trim() &&
-              typeof item.time === 'string' &&
-              item.time.trim()
-          )
-          .slice(0, 12)
-          .map((item: any) => ({
-            time: item.time.trim(),
-
-            title: item.title.trim(),
-
-            category:
-              typeof item.category === 'string' &&
-              item.category.trim()
-                ? item.category.trim()
-                : 'General',
-
-            durationMinutes:
-              Number.isFinite(
-                Number(item.durationMinutes)
-              )
-                ? Math.max(
-                    1,
-                    Math.round(
-                      Number(item.durationMinutes)
-                    )
-                  )
-                : undefined,
-
-            notes:
-              typeof item.notes === 'string' &&
-              item.notes.trim()
-                ? item.notes.trim()
-                : undefined,
-          }));
-
-      if (validSchedule.length === 0) {
-        throw new Error(
-          'The AI returned an empty or invalid schedule. Try describing your day with more details.'
-        );
-      }
-
-      setGeneratedSchedule(validSchedule);
       setScheduleError('');
-    } catch (error: any) {
+
+      setScheduleSuccess(
+        `Schedule generated successfully with ${safeSchedule.length} time ${
+          safeSchedule.length === 1
+            ? 'block'
+            : 'blocks'
+        }.`
+      );
+    } catch (error) {
       console.error(
         'Nodysom AI schedule generation failed:',
         error
       );
 
       setScheduleError(
-        error?.message ||
-          'Could not generate the schedule. Please try again.'
+        error instanceof Error
+          ? error.message
+          : 'Could not generate the schedule. Please try again.'
       );
+
+      setScheduleSuccess('');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  /* -----------------------------
-     TAGS
-  ----------------------------- */
+  /* =========================
+     SCHEDULE PROMPT
+  ========================== */
 
-  const handleTogglePresetTag = (tag: string) => {
+  const handleSchedulePromptChange = (
+    value: string
+  ) => {
+    setSchedulePrompt(value);
+
+    if (scheduleError) {
+      setScheduleError('');
+    }
+
+    if (scheduleSuccess) {
+      setScheduleSuccess('');
+    }
+  };
+
+  const handleSuggestion = (
+    suggestion: string
+  ) => {
+    setSchedulePrompt(suggestion);
+    setScheduleError('');
+    setScheduleSuccess('');
+  };
+
+  /* =========================
+     TAGS
+  ========================== */
+
+  const handleTogglePresetTag = (
+    tag: string
+  ) => {
     setSelectedTags((current) => {
       if (current.includes(tag)) {
-        return current.filter((item) => item !== tag);
+        return current.filter(
+          (item) => item !== tag
+        );
       }
 
       return [...current, tag];
@@ -301,7 +388,8 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   };
 
   const handleAddCustomTag = () => {
-    const trimmed = customTagInput.trim();
+    const trimmed =
+      customTagInput.trim();
 
     if (!trimmed) {
       return;
@@ -310,48 +398,79 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     setSelectedTags((current) => {
       const exists = current.some(
         (tag) =>
-          tag.toLowerCase() === trimmed.toLowerCase()
+          tag.toLowerCase() ===
+          trimmed.toLowerCase()
       );
 
-      return exists ? current : [...current, trimmed];
+      return exists
+        ? current
+        : [...current, trimmed];
     });
 
     setCustomTagInput('');
   };
 
-  const handleRemoveTag = (tag: string) => {
+  const handleRemoveTag = (
+    tag: string
+  ) => {
     setSelectedTags((current) =>
-      current.filter((item) => item !== tag)
+      current.filter(
+        (item) => item !== tag
+      )
     );
   };
 
-  /* -----------------------------
+  /* =========================
+     ADD MODAL
+  ========================== */
+
+  const handleOpenAddModal = () => {
+    setNewTitle('');
+    setNewType('task');
+    setNewTime('09:00 AM');
+    setNewPriority('normal');
+    setSelectedTags(['Work']);
+    setCustomTagInput('');
+    setShowAddModal(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setShowAddModal(false);
+  };
+
+  /* =========================
      CREATE TASK / REMINDER
-  ----------------------------- */
+  ========================== */
 
   const handleCreateTask = (
     event: React.FormEvent
   ) => {
     event.preventDefault();
 
-    const title = newTitle.trim();
+    const title =
+      newTitle.trim();
 
     if (!title) {
       return;
     }
 
-    const finalTags = [...selectedTags];
+    const finalTags = [
+      ...selectedTags,
+    ];
 
-    if (customTagInput.trim()) {
-      const extra = customTagInput.trim();
+    const extraTag =
+      customTagInput.trim();
 
-      if (
-        !finalTags.some(
+    if (extraTag) {
+      const alreadyExists =
+        finalTags.some(
           (tag) =>
-            tag.toLowerCase() === extra.toLowerCase()
-        )
-      ) {
-        finalTags.push(extra);
+            tag.toLowerCase() ===
+            extraTag.toLowerCase()
+        );
+
+      if (!alreadyExists) {
+        finalTags.push(extraTag);
       }
     }
 
@@ -362,7 +481,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
       title,
       type: newType,
       date: todayISO,
-      time: newTime.trim() || '09:00 AM',
+      time:
+        newTime.trim() ||
+        '09:00 AM',
       completed: false,
       priority: newPriority,
       category: primaryCategory,
@@ -381,82 +502,99 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     setShowAddModal(false);
   };
 
-  /* -----------------------------
-     OPEN ADD MODAL
-  ----------------------------- */
+  /* =========================
+     FILTER TAGS
+  ========================== */
 
-  const handleOpenAddModal = () => {
-    setNewTitle('');
-    setNewType('task');
-    setNewTime('09:00 AM');
-    setNewPriority('normal');
-    setSelectedTags(['Work']);
-    setCustomTagInput('');
-    setShowAddModal(true);
-  };
+  const allAvailableTags =
+    useMemo(() => {
+      const tagSet =
+        new Map<string, string>();
 
-  /* -----------------------------
-     TAG FILTER
-  ----------------------------- */
+      PRESET_TAGS.forEach((tag) => {
+        tagSet.set(
+          tag.toLowerCase(),
+          tag
+        );
+      });
 
-  const allAvailableTags = useMemo(() => {
-    const tagSet = new Set<string>();
+      plannerItems.forEach((item) => {
+        if (item.category) {
+          const key =
+            item.category.toLowerCase();
 
-    PRESET_TAGS.forEach((tag) => {
-      tagSet.add(tag);
-    });
+          if (!tagSet.has(key)) {
+            tagSet.set(
+              key,
+              item.category
+            );
+          }
+        }
 
-    plannerItems.forEach((item) => {
-      if (item.category) {
-        tagSet.add(item.category);
-      }
+        if (item.tags) {
+          item.tags.forEach((tag) => {
+            const key =
+              tag.toLowerCase();
 
-      if (item.tags) {
-        item.tags.forEach((tag) => {
-          tagSet.add(tag);
-        });
-      }
-    });
+            if (!tagSet.has(key)) {
+              tagSet.set(key, tag);
+            }
+          });
+        }
+      });
 
-    return Array.from(tagSet);
-  }, [plannerItems]);
-
-  const filteredTasks = useMemo(() => {
-    if (!selectedFilterTag) {
-      return plannerItems;
-    }
-
-    const filter =
-      selectedFilterTag.toLowerCase();
-
-    return plannerItems.filter((item) => {
-      const tags =
-        item.tags && item.tags.length > 0
-          ? item.tags
-          : item.category
-            ? [item.category]
-            : [];
-
-      return (
-        tags.some(
-          (tag) =>
-            tag.toLowerCase() === filter
-        ) ||
-        item.category?.toLowerCase() === filter
+      return Array.from(
+        tagSet.values()
       );
-    });
-  }, [plannerItems, selectedFilterTag]);
+    }, [plannerItems]);
 
-  /* -----------------------------
-     TASK STATS
-  ----------------------------- */
+  const filteredTasks =
+    useMemo(() => {
+      if (!selectedFilterTag) {
+        return plannerItems;
+      }
 
-  const completedTasks = plannerItems.filter(
-    (item) => item.completed
-  ).length;
+      const filter =
+        selectedFilterTag.toLowerCase();
+
+      return plannerItems.filter(
+        (item) => {
+          const tags =
+            item.tags &&
+            item.tags.length > 0
+              ? item.tags
+              : item.category
+                ? [item.category]
+                : [];
+
+          return (
+            tags.some(
+              (tag) =>
+                tag.toLowerCase() ===
+                filter
+            ) ||
+            item.category?.toLowerCase() ===
+              filter
+          );
+        }
+      );
+    }, [
+      plannerItems,
+      selectedFilterTag,
+    ]);
+
+  /* =========================
+     STATS
+  ========================== */
+
+  const completedTasks =
+    plannerItems.filter(
+      (item) => item.completed
+    ).length;
 
   const pendingTasks =
-    plannerItems.length - completedTasks;
+    plannerItems.length -
+    completedTasks;
 
   const completionRate =
     plannerItems.length > 0
@@ -467,24 +605,31 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
         )
       : 0;
 
-  const habitStreak = habits.reduce(
-    (max, habit) =>
-      Math.max(max, habit.streak || 0),
-    0
-  );
+  const habitStreak =
+    habits.reduce(
+      (max, habit) =>
+        Math.max(
+          max,
+          habit.streak || 0
+        ),
+      0
+    );
 
-  const completedHabits = habits.filter(
-    (habit) => habit.completedToday
-  ).length;
+  const completedHabits =
+    habits.filter(
+      (habit) =>
+        habit.completedToday
+    ).length;
 
-  /* -----------------------------
+  /* =========================
      RENDER
-  ----------------------------- */
+  ========================== */
 
   return (
     <div className="min-h-full max-w-3xl mx-auto px-4 pt-4 pb-28 space-y-6">
 
       {/* HERO */}
+
       <section className="relative overflow-hidden rounded-3xl border border-indigo-500/20 bg-gradient-to-br from-slate-950 via-indigo-950/60 to-slate-950 p-5 shadow-2xl">
 
         <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-indigo-500/10 blur-3xl" />
@@ -565,6 +710,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
       </section>
 
       {/* MAIN TABS */}
+
       <div className="grid grid-cols-3 gap-1 rounded-2xl border border-slate-800 bg-slate-950/80 p-1 backdrop-blur">
 
         {[
@@ -624,6 +770,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
         <section className="space-y-5">
 
           {/* AI SCHEDULER */}
+
           <div className="rounded-3xl border border-indigo-500/20 bg-gradient-to-br from-indigo-950/50 to-slate-950 p-4 shadow-xl">
 
             <div className="flex items-start gap-3">
@@ -648,15 +795,11 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
               <input
                 value={schedulePrompt}
-                onChange={(event) => {
-                  setSchedulePrompt(
+                onChange={(event) =>
+                  handleSchedulePromptChange(
                     event.target.value
-                  );
-
-                  if (scheduleError) {
-                    setScheduleError('');
-                  }
-                }}
+                  )
+                }
                 onKeyDown={(event) => {
                   if (
                     event.key === 'Enter' &&
@@ -664,18 +807,23 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   ) {
                     event.preventDefault();
 
-                    if (schedulePrompt.trim()) {
+                    if (
+                      schedulePrompt.trim()
+                    ) {
                       handleGenerateSchedule();
                     }
                   }
                 }}
                 placeholder="e.g. School 8 AM–2 PM, study 2 hours..."
+                maxLength={1000}
                 className="min-h-11 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs text-white outline-none transition focus:border-indigo-500"
               />
 
               <button
                 type="button"
-                onClick={handleGenerateSchedule}
+                onClick={
+                  handleGenerateSchedule
+                }
                 disabled={
                   isGenerating ||
                   !schedulePrompt.trim()
@@ -685,12 +833,16 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 {isGenerating ? (
                   <>
                     <RefreshCw className="h-4 w-4 animate-spin" />
-                    <span>Generating...</span>
+                    <span>
+                      Generating...
+                    </span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    <span>Generate</span>
+                    <span>
+                      Generate
+                    </span>
                     <ArrowRight className="h-3.5 w-3.5" />
                   </>
                 )}
@@ -698,15 +850,37 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
             </div>
 
-            {/* ERROR MESSAGE */}
+            {/* ERROR */}
+
             {scheduleError && (
               <div
                 role="alert"
-                className="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-xs leading-5 text-rose-300"
+                aria-live="assertive"
+                className="mt-3 flex items-start gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-xs leading-5 text-rose-300"
               >
-                {scheduleError}
+                <X className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {scheduleError}
+                </span>
               </div>
             )}
+
+            {/* SUCCESS */}
+
+            {scheduleSuccess && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2.5 text-xs leading-5 text-emerald-300"
+              >
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {scheduleSuccess}
+                </span>
+              </div>
+            )}
+
+            {/* SUGGESTIONS */}
 
             <div className="mt-3 flex flex-wrap gap-2">
 
@@ -718,13 +892,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 <button
                   key={suggestion}
                   type="button"
-                  onClick={() => {
-                    setSchedulePrompt(
+                  disabled={isGenerating}
+                  onClick={() =>
+                    handleSuggestion(
                       suggestion
-                    );
-                    setScheduleError('');
-                  }}
-                  className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-[10px] font-medium text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-300"
+                    )
+                  }
+                  className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-[10px] font-medium text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {suggestion}
                 </button>
@@ -735,6 +909,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           </div>
 
           {/* TIMELINE */}
+
           <div>
 
             <div className="mb-3 flex items-center justify-between">
@@ -755,56 +930,74 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
             </div>
 
-            <div className="relative space-y-3 pl-6">
+            {generatedSchedule.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/50 p-8 text-center">
+                <Clock className="mx-auto h-6 w-6 text-slate-600" />
 
-              <div className="absolute bottom-3 left-[9px] top-3 w-px bg-gradient-to-b from-indigo-500/70 via-slate-700 to-transparent" />
+                <p className="mt-3 text-xs font-semibold text-slate-400">
+                  No schedule available
+                </p>
 
-              {generatedSchedule.map(
-                (block, index) => (
-                  <div
-                    key={`${block.time}-${index}`}
-                    className="relative rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-sm transition hover:border-indigo-500/20"
-                  >
+                <p className="mt-1 text-[10px] text-slate-600">
+                  Generate a schedule using Nodysom AI.
+                </p>
+              </div>
+            ) : (
+              <div className="relative space-y-3 pl-6">
 
-                    <span className="absolute -left-[23px] top-5 h-3.5 w-3.5 rounded-full border-2 border-indigo-400 bg-slate-950 shadow-[0_0_12px_rgba(99,102,241,0.35)]" />
+                <div className="absolute bottom-3 left-[9px] top-3 w-px bg-gradient-to-b from-indigo-500/70 via-slate-700 to-transparent" />
 
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                {generatedSchedule.map(
+                  (block, index) => (
+                    <div
+                      key={`${block.time}-${block.title}-${index}`}
+                      className="relative rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-sm transition hover:border-indigo-500/20"
+                    >
 
-                      <span className="text-[11px] font-bold text-indigo-400">
-                        {block.time}
-                      </span>
+                      <span className="absolute -left-[23px] top-5 h-3.5 w-3.5 rounded-full border-2 border-indigo-400 bg-slate-950 shadow-[0_0_12px_rgba(99,102,241,0.35)]" />
 
-                      <span
-                        className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${getTagBadgeStyle(
-                          block.category
-                        )}`}
-                      >
-                        {block.category}
-                      </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+
+                        <span className="text-[11px] font-bold text-indigo-400">
+                          {block.time}
+                        </span>
+
+                        <span
+                          className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${getTagBadgeStyle(
+                            block.category
+                          )}`}
+                        >
+                          {block.category}
+                        </span>
+
+                      </div>
+
+                      <h3 className="mt-2 text-sm font-bold text-white">
+                        {block.title}
+                      </h3>
+
+                      {typeof block.durationMinutes ===
+                        'number' && (
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          {
+                            block.durationMinutes
+                          }{' '}
+                          minutes
+                        </p>
+                      )}
+
+                      {block.notes && (
+                        <p className="mt-2 text-xs leading-5 text-slate-400">
+                          {block.notes}
+                        </p>
+                      )}
 
                     </div>
+                  )
+                )}
 
-                    <h3 className="mt-2 text-sm font-bold text-white">
-                      {block.title}
-                    </h3>
-
-                    {block.durationMinutes && (
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {block.durationMinutes} minutes
-                      </p>
-                    )}
-
-                    {block.notes && (
-                      <p className="mt-2 text-xs leading-5 text-slate-400">
-                        {block.notes}
-                      </p>
-                    )}
-
-                  </div>
-                )
-              )}
-
-            </div>
+              </div>
+            )}
 
           </div>
 
@@ -826,13 +1019,16 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </p>
 
               <p className="mt-1 text-xs text-slate-400">
-                {pendingTasks} pending · {completedTasks} completed
+                {pendingTasks} pending ·{' '}
+                {completedTasks} completed
               </p>
             </div>
 
             <button
               type="button"
-              onClick={handleOpenAddModal}
+              onClick={
+                handleOpenAddModal
+              }
               className="flex min-h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 active:scale-95"
             >
               <Plus className="h-4 w-4" />
@@ -842,6 +1038,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           </div>
 
           {/* FILTERS */}
+
           <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
 
             <div className="mb-2 flex items-center gap-1.5">
@@ -856,7 +1053,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 <button
                   type="button"
                   onClick={() =>
-                    setSelectedFilterTag(null)
+                    setSelectedFilterTag(
+                      null
+                    )
                   }
                   className="ml-auto text-[10px] font-semibold text-indigo-400"
                 >
@@ -871,7 +1070,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               <button
                 type="button"
                 onClick={() =>
-                  setSelectedFilterTag(null)
+                  setSelectedFilterTag(
+                    null
+                  )
                 }
                 className={`shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-bold transition ${
                   selectedFilterTag === null
@@ -888,13 +1089,17 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     key={tag}
                     type="button"
                     onClick={() =>
-                      setSelectedFilterTag(tag)
+                      setSelectedFilterTag(
+                        tag
+                      )
                     }
                     className={`shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-bold transition ${
                       selectedFilterTag?.toLowerCase() ===
                       tag.toLowerCase()
                         ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
-                        : getTagBadgeStyle(tag)
+                        : getTagBadgeStyle(
+                            tag
+                          )
                     }`}
                   >
                     {tag}
@@ -907,8 +1112,8 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           </div>
 
           {/* TASK LIST */}
-          {filteredTasks.length === 0 ? (
 
+          {filteredTasks.length === 0 ? (
             <div className="rounded-3xl border border-dashed border-slate-800 bg-slate-950/50 p-8 text-center">
 
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900">
@@ -916,30 +1121,36 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </div>
 
               <h3 className="mt-4 text-sm font-bold text-slate-300">
-                No items yet
+                {selectedFilterTag
+                  ? 'No matching items'
+                  : 'No tasks yet'}
               </h3>
 
               <p className="mt-1 text-xs text-slate-500">
-                Add a task or reminder to start organizing your day.
+                {selectedFilterTag
+                  ? 'Try another tag or clear the filter.'
+                  : 'Add your first task or reminder to get started.'}
               </p>
 
-              <button
-                type="button"
-                onClick={handleOpenAddModal}
-                className="mt-4 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white"
-              >
-                Add your first item
-              </button>
+              {!selectedFilterTag && (
+                <button
+                  type="button"
+                  onClick={
+                    handleOpenAddModal
+                  }
+                  className="mt-4 inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add your first item
+                </button>
+              )}
 
             </div>
-
           ) : (
-
             <div className="space-y-2.5">
 
               {filteredTasks.map(
                 (item) => {
-
                   const tags =
                     item.tags &&
                     item.tags.length > 0
@@ -951,10 +1162,10 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   return (
                     <div
                       key={item.id}
-                      className={`group rounded-2xl border p-4 transition ${
+                      className={`rounded-2xl border p-4 transition ${
                         item.completed
                           ? 'border-emerald-500/10 bg-emerald-500/[0.03]'
-                          : 'border-slate-800 bg-slate-900/80 hover:border-indigo-500/20'
+                          : 'border-slate-800 bg-slate-900/80'
                       }`}
                     >
 
@@ -963,7 +1174,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                         <button
                           type="button"
                           onClick={() =>
-                            onToggleTask(item.id)
+                            onToggleTask(
+                              item.id
+                            )
                           }
                           aria-label={
                             item.completed
@@ -995,7 +1208,8 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                             <span
                               className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
-                                item.type === 'reminder'
+                                item.type ===
+                                'reminder'
                                   ? 'border-purple-500/20 bg-purple-500/10 text-purple-300'
                                   : 'border-sky-500/20 bg-sky-500/10 text-sky-300'
                               }`}
@@ -1016,9 +1230,11 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                             <span
                               className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
-                                item.priority === 'high'
+                                item.priority ===
+                                'high'
                                   ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
-                                  : item.priority === 'low'
+                                  : item.priority ===
+                                      'low'
                                     ? 'border-slate-700 bg-slate-800 text-slate-400'
                                     : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
                               }`}
@@ -1031,16 +1247,18 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                           {tags.length > 0 && (
                             <div className="mt-3 flex flex-wrap gap-1.5">
 
-                              {tags.map((tag) => (
-                                <span
-                                  key={tag}
-                                  className={`rounded-full border px-2 py-1 text-[9px] font-semibold ${getTagBadgeStyle(
-                                    tag
-                                  )}`}
-                                >
-                                  {tag}
-                                </span>
-                              ))}
+                              {tags.map(
+                                (tag) => (
+                                  <span
+                                    key={tag}
+                                    className={`rounded-full border px-2 py-1 text-[9px] font-semibold ${getTagBadgeStyle(
+                                      tag
+                                    )}`}
+                                  >
+                                    {tag}
+                                  </span>
+                                )
+                              )}
 
                             </div>
                           )}
@@ -1059,7 +1277,6 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               )}
 
             </div>
-
           )}
 
         </section>
@@ -1129,7 +1346,8 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 </div>
 
                 <p className="mt-2 text-2xl font-bold text-white">
-                  {completedHabits}/{habits.length}
+                  {completedHabits}/
+                  {habits.length}
                 </p>
 
                 <p className="text-[10px] text-slate-500">
@@ -1143,7 +1361,6 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           </div>
 
           {habits.length === 0 ? (
-
             <div className="rounded-3xl border border-dashed border-slate-800 bg-slate-950/50 p-8 text-center">
 
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900">
@@ -1159,85 +1376,84 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </p>
 
             </div>
-
           ) : (
-
             <div className="space-y-2.5">
 
-              {habits.map((habit) => (
+              {habits.map(
+                (habit) => (
+                  <div
+                    key={habit.id}
+                    className={`rounded-2xl border p-4 transition ${
+                      habit.completedToday
+                        ? 'border-emerald-500/20 bg-emerald-500/[0.04]'
+                        : 'border-slate-800 bg-slate-900/80'
+                    }`}
+                  >
 
-                <div
-                  key={habit.id}
-                  className={`rounded-2xl border p-4 transition ${
-                    habit.completedToday
-                      ? 'border-emerald-500/20 bg-emerald-500/[0.04]'
-                      : 'border-slate-800 bg-slate-900/80'
-                  }`}
-                >
+                    <div className="flex items-center gap-3">
 
-                  <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onToggleHabit(
+                            habit.id
+                          )
+                        }
+                        aria-label={
+                          habit.completedToday
+                            ? 'Mark habit incomplete'
+                            : 'Mark habit complete'
+                        }
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition ${
+                          habit.completedToday
+                            ? 'border-emerald-400 bg-emerald-500 text-white'
+                            : 'border-slate-700 bg-slate-950 text-slate-500 hover:border-orange-400 hover:text-orange-400'
+                        }`}
+                      >
+                        {habit.completedToday ? (
+                          <Check className="h-5 w-5" />
+                        ) : (
+                          <Zap className="h-5 w-5" />
+                        )}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onToggleHabit(habit.id)
-                      }
-                      aria-label={
-                        habit.completedToday
-                          ? 'Mark habit incomplete'
-                          : 'Mark habit complete'
-                      }
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition ${
-                        habit.completedToday
-                          ? 'border-emerald-400 bg-emerald-500 text-white'
-                          : 'border-slate-700 bg-slate-950 text-slate-500 hover:border-orange-400 hover:text-orange-400'
-                      }`}
-                    >
-                      {habit.completedToday ? (
-                        <Check className="h-5 w-5" />
-                      ) : (
-                        <Zap className="h-5 w-5" />
-                      )}
-                    </button>
+                      <div className="min-w-0 flex-1">
 
-                    <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-bold text-white">
+                          {habit.name}
+                        </h3>
 
-                      <h3 className="text-sm font-bold text-white">
-                        {habit.name}
-                      </h3>
-
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {habit.category}
-                      </p>
-
-                    </div>
-
-                    <div className="text-right">
-
-                      <div className="flex items-center gap-1">
-
-                        <Flame className="h-4 w-4 text-orange-400" />
-
-                        <span className="text-sm font-bold text-orange-300">
-                          {habit.streak}
-                        </span>
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          {habit.category}
+                        </p>
 
                       </div>
 
-                      <p className="text-[9px] text-slate-600">
-                        day streak
-                      </p>
+                      <div className="text-right">
+
+                        <div className="flex items-center gap-1">
+
+                          <Flame className="h-4 w-4 text-orange-400" />
+
+                          <span className="text-sm font-bold text-orange-300">
+                            {habit.streak}
+                          </span>
+
+                        </div>
+
+                        <p className="text-[9px] text-slate-600">
+                          day streak
+                        </p>
+
+                      </div>
 
                     </div>
 
                   </div>
-
-                </div>
-
-              ))}
+                )
+              )}
 
             </div>
-
           )}
 
         </section>
@@ -1252,19 +1468,24 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           className="fixed inset-0 z-[100] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center"
           onMouseDown={(event) => {
             if (
-              event.target === event.currentTarget
+              event.target ===
+              event.currentTarget
             ) {
-              setShowAddModal(false);
+              handleCloseAddModal();
             }
           }}
         >
 
           <form
             onSubmit={handleCreateTask}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="planner-add-item-title"
             className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-700 bg-slate-950 shadow-2xl"
           >
 
             {/* MODAL HEADER */}
+
             <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
 
               <div>
@@ -1273,16 +1494,22 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   Planner
                 </p>
 
-                <h2 className="mt-1 text-lg font-bold text-white">
-                  Add {newType === 'task' ? 'Task' : 'Reminder'}
+                <h2
+                  id="planner-add-item-title"
+                  className="mt-1 text-lg font-bold text-white"
+                >
+                  Add{' '}
+                  {newType === 'task'
+                    ? 'Task'
+                    : 'Reminder'}
                 </h2>
 
               </div>
 
               <button
                 type="button"
-                onClick={() =>
-                  setShowAddModal(false)
+                onClick={
+                  handleCloseAddModal
                 }
                 aria-label="Close add item modal"
                 className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-slate-400 transition hover:text-white"
@@ -1295,6 +1522,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             <div className="space-y-4 p-5">
 
               {/* TYPE */}
+
               <div className="grid grid-cols-2 gap-2">
 
                 {[
@@ -1330,6 +1558,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </div>
 
               {/* TITLE */}
+
               <div>
 
                 <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -1352,6 +1581,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </div>
 
               {/* TIME + PRIORITY */}
+
               <div className="grid grid-cols-2 gap-3">
 
                 <div>
@@ -1402,7 +1632,6 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     <option value="high">
                       High
                     </option>
-
                   </select>
 
                 </div>
@@ -1410,6 +1639,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </div>
 
               {/* TAGS */}
+
               <div>
 
                 <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -1418,55 +1648,68 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                 <div className="flex flex-wrap gap-1.5">
 
-                  {PRESET_TAGS.map((tag) => {
+                  {PRESET_TAGS.map(
+                    (tag) => {
+                      const active =
+                        selectedTags.includes(
+                          tag
+                        );
 
-                    const active =
-                      selectedTags.includes(tag);
-
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() =>
-                          handleTogglePresetTag(tag)
-                        }
-                        className={`rounded-full border px-2.5 py-1.5 text-[9px] font-bold transition ${
-                          active
-                            ? 'border-indigo-500/40 bg-indigo-500/15 text-indigo-300'
-                            : getTagBadgeStyle(tag)
-                        }`}
-                      >
-                        {tag}
-                      </button>
-                    );
-                  })}
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() =>
+                            handleTogglePresetTag(
+                              tag
+                            )
+                          }
+                          className={`rounded-full border px-2.5 py-1.5 text-[9px] font-bold transition ${
+                            active
+                              ? 'border-indigo-500/40 bg-indigo-500/15 text-indigo-300'
+                              : getTagBadgeStyle(
+                                  tag
+                                )
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    }
+                  )}
 
                 </div>
 
                 {/* SELECTED TAGS */}
+
                 {selectedTags.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1.5">
 
-                    {selectedTags.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() =>
-                          handleRemoveTag(tag)
-                        }
-                        aria-label={`Remove ${tag} tag`}
-                        className="flex items-center gap-1 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-1 text-[9px] font-semibold text-indigo-300"
-                      >
-                        {tag}
+                    {selectedTags.map(
+                      (tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() =>
+                            handleRemoveTag(
+                              tag
+                            )
+                          }
+                          aria-label={`Remove ${tag} tag`}
+                          className="flex items-center gap-1 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-1 text-[9px] font-semibold text-indigo-300"
+                        >
+                          {tag}
 
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    ))}
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      )
+                    )}
 
                   </div>
                 )}
 
                 {/* CUSTOM TAG */}
+
                 <div className="mt-2 flex gap-2">
 
                   <input
@@ -1477,7 +1720,10 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                       )
                     }
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
+                      if (
+                        event.key ===
+                        'Enter'
+                      ) {
                         event.preventDefault();
                         handleAddCustomTag();
                       }
@@ -1489,8 +1735,12 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={handleAddCustomTag}
-                    disabled={!customTagInput.trim()}
+                    onClick={
+                      handleAddCustomTag
+                    }
+                    disabled={
+                      !customTagInput.trim()
+                    }
                     className="rounded-xl border border-slate-800 bg-slate-900 px-3 text-xs font-bold text-slate-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Add
@@ -1501,12 +1751,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               </div>
 
               {/* ACTIONS */}
+
               <div className="flex gap-2 pt-2">
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowAddModal(false)
+                  onClick={
+                    handleCloseAddModal
                   }
                   className="min-h-11 flex-1 rounded-xl border border-slate-800 bg-slate-900 text-xs font-bold text-slate-400 transition hover:text-white"
                 >
@@ -1515,7 +1766,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                 <button
                   type="submit"
-                  disabled={!newTitle.trim()}
+                  disabled={
+                    !newTitle.trim()
+                  }
                   className="min-h-11 flex-1 rounded-xl bg-indigo-600 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Create Item
