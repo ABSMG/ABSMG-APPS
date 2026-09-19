@@ -331,7 +331,7 @@ Goals: ${cleanText(
 async function generateAgentAnswer(
   request: AgentRequest,
   toolResult?: string
-): Promise<string> {
+) {
   const ai = getAI();
 
   /* -------------------------------------------------------
@@ -339,18 +339,18 @@ async function generateAgentAnswer(
   ------------------------------------------------------- */
 
   if (!ai) {
-    if (toolResult) {
-      return (
-        `Tool result: ${toolResult}`
-      );
-    }
+    return {
+      reply: toolResult
+        ? `Tool result: ${toolResult}`
+        : `I received your request: "${cleanText(
+            request.message,
+            MAX_MESSAGE_LENGTH
+          )}". Gemini is not connected yet.`,
 
-    return (
-      `I received your request: "${cleanText(
-        request.message,
-        MAX_MESSAGE_LENGTH
-      )}". Gemini is not connected yet.`
-    );
+      detectedAction: null,
+
+      newMemory: null,
+    };
   }
 
   const message =
@@ -406,6 +406,84 @@ Your responsibilities:
 9. Respect the user's preferred language.
 10. Clearly state uncertainty when information is uncertain.
 
+SMART ACTIONS:
+
+If the user asks Nodysom to create, add, schedule,
+remind, plan, or organize something, create a
+detectedAction.
+
+Examples:
+
+"Remind me to call John tomorrow at 5pm"
+
+"Add study chemistry to my planner tomorrow"
+
+"Schedule gym at 6pm"
+
+"Create a task to finish my website"
+
+The detectedAction is only a proposal.
+The frontend will ask the user for confirmation.
+
+Do NOT claim that the action has already been added.
+
+MEMORY:
+
+Only create newMemory when the user explicitly
+shares a useful personal fact, preference, goal,
+habit, or other information that Nodysom should
+remember.
+
+Examples:
+
+"I prefer Swahili."
+
+"Remember that I am learning Python."
+
+"My goal is to become a software developer."
+
+Do NOT create memories from ordinary questions.
+
+Return ONLY valid JSON.
+
+Required format:
+
+{
+  "reply": "natural response to the user",
+  "detectedAction": null,
+  "newMemory": null
+}
+
+When an action is detected:
+
+{
+  "reply": "I'll prepare that for your confirmation.",
+  "detectedAction": {
+    "type": "TASK",
+    "title": "Finish my website",
+    "date": "2026-09-20",
+    "time": "09:00 AM",
+    "category": "General",
+    "confirmedRequired": true
+  },
+  "newMemory": null
+}
+
+When a memory is detected:
+
+{
+  "reply": "I'll remember that.",
+  "detectedAction": null,
+  "newMemory": "The user is learning Python."
+}
+
+Action type must be one of:
+
+TASK
+REMINDER
+SCHEDULE
+BUDGET
+
 USER PROFILE:
 ${profileText}
 
@@ -441,21 +519,148 @@ ${toolContext}
             systemInstruction,
 
             responseMimeType:
-              "text/plain",
+              "application/json",
           },
         })
       );
 
-    const answer =
-      response.text?.trim();
+    const raw =
+      response.text?.trim() ||
+      "";
 
-    if (!answer) {
-      return (
-        "I am here to help."
-      );
+    let parsed: any;
+
+    /* -----------------------------------------------------
+       PARSE JSON
+    ----------------------------------------------------- */
+
+    try {
+      parsed =
+        JSON.parse(raw);
+    } catch {
+      const cleaned =
+        raw
+          .replace(
+            /^```json\s*/i,
+            ""
+          )
+          .replace(
+            /^```\s*/i,
+            ""
+          )
+          .replace(
+            /\s*```$/i,
+            ""
+          )
+          .trim();
+
+      parsed =
+        JSON.parse(cleaned);
     }
 
-    return answer;
+    /* -----------------------------------------------------
+       RESPONSE
+    ----------------------------------------------------- */
+
+    const reply =
+      cleanText(
+        parsed?.reply,
+        10000
+      ) ||
+      "I am here to help.";
+
+    /* -----------------------------------------------------
+       DETECTED ACTION
+    ----------------------------------------------------- */
+
+    let detectedAction =
+      null;
+
+    if (
+      parsed?.detectedAction &&
+      typeof parsed.detectedAction ===
+        "object"
+    ) {
+      const action =
+        parsed.detectedAction;
+
+      const allowedTypes = [
+        "TASK",
+        "REMINDER",
+        "SCHEDULE",
+        "BUDGET",
+      ];
+
+      const title =
+        cleanText(
+          action.title,
+          200
+        );
+
+      if (
+        allowedTypes.includes(
+          action.type
+        ) &&
+        title
+      ) {
+        detectedAction = {
+          type:
+            action.type,
+
+          title,
+
+          date:
+            cleanText(
+              action.date,
+              30
+            ) || undefined,
+
+          time:
+            cleanText(
+              action.time,
+              30
+            ) || undefined,
+
+          category:
+            cleanText(
+              action.category,
+              80
+            ) || "General",
+
+          amount:
+            Number.isFinite(
+              Number(
+                action.amount
+              )
+            )
+              ? Number(
+                  action.amount
+                )
+              : undefined,
+
+          confirmedRequired:
+            true,
+        };
+      }
+    }
+
+    /* -----------------------------------------------------
+       NEW MEMORY
+    ----------------------------------------------------- */
+
+    const newMemory =
+      cleanText(
+        parsed?.newMemory,
+        MAX_MEMORY_LENGTH
+      ) || null;
+
+    return {
+      reply,
+
+      detectedAction,
+
+      newMemory,
+    };
   } catch (error: any) {
     console.error(
       "[Nodysom AI] Gemini error:",
@@ -463,14 +668,28 @@ ${toolContext}
     );
 
     if (toolResult) {
-      return (
-        `Tool result: ${toolResult}`
-      );
+      return {
+        reply:
+          `Tool result: ${toolResult}`,
+
+        detectedAction:
+          null,
+
+        newMemory:
+          null,
+      };
     }
 
-    return (
-      "Nodysom AI could not connect to the AI model right now. Please try again."
-    );
+    return {
+      reply:
+        "Nodysom AI could not connect to the AI model right now. Please try again.",
+
+      detectedAction:
+        null,
+
+      newMemory:
+        null,
+    };
   }
 }
 
@@ -663,6 +882,12 @@ app.post(
 
         usedTool: false,
 
+        detectedAction:
+          null,
+
+        newMemory:
+          null,
+
         latency,
       });
     }
@@ -775,6 +1000,14 @@ app.post(
         toolResult:
           result.toolResult ||
           null,
+
+        detectedAction:
+          result.detectedAction ||
+          null,
+
+        newMemory:
+          result.newMemory ||
+          null,
       });
     } catch (error: any) {
       console.error(
@@ -789,6 +1022,12 @@ app.post(
 
         reply:
           "Nodysom AI could not process that request right now.",
+
+        detectedAction:
+          null,
+
+        newMemory:
+          null,
       });
     }
   }
@@ -1100,18 +1339,17 @@ app.post(
 
       const ai = getAI();
 
-      /* -----------------------------------------------------
-         OFFLINE FALLBACK
-      ----------------------------------------------------- */
-
       if (!ai) {
         return res.json({
           schedule: [
             {
               time: "08:00",
-              title: "Start your day",
-              category: "General",
-              durationMinutes: 30,
+              title:
+                "Start your day",
+              category:
+                "General",
+              durationMinutes:
+                30,
               notes:
                 "AI is offline. This is a basic fallback schedule.",
             },
@@ -1120,8 +1358,10 @@ app.post(
               time: "10:00",
               title:
                 "Work on your main priority",
-              category: "Priority",
-              durationMinutes: 60,
+              category:
+                "Priority",
+              durationMinutes:
+                60,
               notes: "",
             },
 
@@ -1129,8 +1369,10 @@ app.post(
               time: "14:00",
               title:
                 "Review tasks and continue",
-              category: "Productivity",
-              durationMinutes: 60,
+              category:
+                "Productivity",
+              durationMinutes:
+                60,
               notes: "",
             },
 
@@ -1138,8 +1380,10 @@ app.post(
               time: "18:00",
               title:
                 "Review the day",
-              category: "Planning",
-              durationMinutes: 30,
+              category:
+                "Planning",
+              durationMinutes:
+                30,
               notes: "",
             },
           ],
@@ -1149,10 +1393,6 @@ app.post(
           offline: true,
         });
       }
-
-      /* -----------------------------------------------------
-         AI SCHEDULE PROMPT
-      ----------------------------------------------------- */
 
       const schedulePrompt = `
 Create a practical daily schedule for the user.
@@ -1213,10 +1453,6 @@ Rules:
 
       let parsed: any;
 
-      /* -----------------------------------------------------
-         PARSE AI JSON
-      ----------------------------------------------------- */
-
       try {
         parsed =
           JSON.parse(raw);
@@ -1247,10 +1483,6 @@ Rules:
         )
           ? parsed.schedule
           : [];
-
-      /* -----------------------------------------------------
-         VALIDATE / NORMALIZE SCHEDULE
-      ----------------------------------------------------- */
 
       const schedule =
         sourceSchedule
@@ -1323,7 +1555,6 @@ Rules:
 
         offline: false,
       });
-
     } catch (error: any) {
       console.error(
         "[Nodysom Smart Schedule] Error:",
