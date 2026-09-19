@@ -11,7 +11,6 @@ import {
   ListTodo,
   Check,
   X,
-  Trash2,
   RefreshCw,
   Target,
   Zap,
@@ -125,7 +124,11 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   >('schedule');
 
   const [isGenerating, setIsGenerating] = useState(false);
+
   const [schedulePrompt, setSchedulePrompt] = useState('');
+
+  const [scheduleError, setScheduleError] = useState('');
+
   const [generatedSchedule, setGeneratedSchedule] =
     useState<ScheduleBlock[]>(DEFAULT_SCHEDULE);
 
@@ -135,6 +138,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
 
   const [newTitle, setNewTitle] = useState('');
+
   const [newType, setNewType] =
     useState<'task' | 'reminder'>('task');
 
@@ -156,45 +160,126 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
     day: 'numeric',
   });
 
-  const todayISO = today.toISOString().split('T')[0];
+  /*
+   * Use local calendar date instead of toISOString().
+   * This prevents timezone-related date shifts.
+   */
+  const todayISO = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
 
   /* -----------------------------
      AI SMART SCHEDULER
   ----------------------------- */
 
   const handleGenerateSchedule = async () => {
-    if (!schedulePrompt.trim() || isGenerating) return;
+    const prompt = schedulePrompt.trim();
+
+    if (!prompt || isGenerating) {
+      return;
+    }
 
     setIsGenerating(true);
+    setScheduleError('');
 
     try {
-      const response = await fetch('/api/ai/smart-schedule', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: schedulePrompt.trim(),
-          date: todayISO,
-        }),
-      });
+      const response = await fetch(
+        '/api/ai/smart-schedule',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt,
+            date: todayISO,
+          }),
+        }
+      );
+
+      let data: any = {};
+
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(
+          data?.error ||
+            `Schedule generation failed (${response.status}).`
+        );
       }
 
-      const data = await response.json();
+      const rawSchedule = Array.isArray(data?.schedule)
+        ? data.schedule
+        : [];
 
-      if (
-        Array.isArray(data?.schedule) &&
-        data.schedule.length > 0
-      ) {
-        setGeneratedSchedule(data.schedule);
+      /*
+       * Validate and sanitize AI output before
+       * allowing it into the UI.
+       */
+      const validSchedule: ScheduleBlock[] =
+        rawSchedule
+          .filter(
+            (item: any) =>
+              item &&
+              typeof item.title === 'string' &&
+              item.title.trim() &&
+              typeof item.time === 'string' &&
+              item.time.trim()
+          )
+          .slice(0, 12)
+          .map((item: any) => ({
+            time: item.time.trim(),
+
+            title: item.title.trim(),
+
+            category:
+              typeof item.category === 'string' &&
+              item.category.trim()
+                ? item.category.trim()
+                : 'General',
+
+            durationMinutes:
+              Number.isFinite(
+                Number(item.durationMinutes)
+              )
+                ? Math.max(
+                    1,
+                    Math.round(
+                      Number(item.durationMinutes)
+                    )
+                  )
+                : undefined,
+
+            notes:
+              typeof item.notes === 'string' &&
+              item.notes.trim()
+                ? item.notes.trim()
+                : undefined,
+          }));
+
+      if (validSchedule.length === 0) {
+        throw new Error(
+          'The AI returned an empty or invalid schedule. Try describing your day with more details.'
+        );
       }
-    } catch (error) {
+
+      setGeneratedSchedule(validSchedule);
+      setScheduleError('');
+    } catch (error: any) {
       console.error(
         'Nodysom AI schedule generation failed:',
         error
+      );
+
+      setScheduleError(
+        error?.message ||
+          'Could not generate the schedule. Please try again.'
       );
     } finally {
       setIsGenerating(false);
@@ -218,7 +303,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   const handleAddCustomTag = () => {
     const trimmed = customTagInput.trim();
 
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
 
     setSelectedTags((current) => {
       const exists = current.some(
@@ -249,7 +336,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
     const title = newTitle.trim();
 
-    if (!title) return;
+    if (!title) {
+      return;
+    }
 
     const finalTags = [...selectedTags];
 
@@ -273,7 +362,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
       title,
       type: newType,
       date: todayISO,
-      time: newTime,
+      time: newTime.trim() || '09:00 AM',
       completed: false,
       priority: newPriority,
       category: primaryCategory,
@@ -293,15 +382,29 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
   };
 
   /* -----------------------------
+     OPEN ADD MODAL
+  ----------------------------- */
+
+  const handleOpenAddModal = () => {
+    setNewTitle('');
+    setNewType('task');
+    setNewTime('09:00 AM');
+    setNewPriority('normal');
+    setSelectedTags(['Work']);
+    setCustomTagInput('');
+    setShowAddModal(true);
+  };
+
+  /* -----------------------------
      TAG FILTER
   ----------------------------- */
 
   const allAvailableTags = useMemo(() => {
     const tagSet = new Set<string>();
 
-    PRESET_TAGS.forEach((tag) =>
-      tagSet.add(tag)
-    );
+    PRESET_TAGS.forEach((tag) => {
+      tagSet.add(tag);
+    });
 
     plannerItems.forEach((item) => {
       if (item.category) {
@@ -309,9 +412,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
       }
 
       if (item.tags) {
-        item.tags.forEach((tag) =>
-          tagSet.add(tag)
-        );
+        item.tags.forEach((tag) => {
+          tagSet.add(tag);
+        });
       }
     });
 
@@ -385,6 +488,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
       <section className="relative overflow-hidden rounded-3xl border border-indigo-500/20 bg-gradient-to-br from-slate-950 via-indigo-950/60 to-slate-950 p-5 shadow-2xl">
 
         <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-indigo-500/10 blur-3xl" />
+
         <div className="absolute -bottom-20 -left-20 h-40 w-40 rounded-full bg-purple-500/10 blur-3xl" />
 
         <div className="relative">
@@ -429,6 +533,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               <p className="text-lg font-bold text-white">
                 {plannerItems.length}
               </p>
+
               <p className="text-[10px] text-slate-500">
                 Total items
               </p>
@@ -438,6 +543,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               <p className="text-lg font-bold text-emerald-300">
                 {completedTasks}
               </p>
+
               <p className="text-[10px] text-slate-500">
                 Completed
               </p>
@@ -447,6 +553,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
               <p className="text-lg font-bold text-orange-300">
                 {habitStreak}
               </p>
+
               <p className="text-[10px] text-slate-500">
                 Best streak
               </p>
@@ -479,6 +586,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
         ].map((tab) => {
 
           const Icon = tab.icon;
+
           const active =
             activeTab === tab.id;
 
@@ -540,17 +648,25 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
               <input
                 value={schedulePrompt}
-                onChange={(event) =>
+                onChange={(event) => {
                   setSchedulePrompt(
                     event.target.value
-                  )
-                }
+                  );
+
+                  if (scheduleError) {
+                    setScheduleError('');
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (
                     event.key === 'Enter' &&
-                    schedulePrompt.trim()
+                    !event.shiftKey
                   ) {
-                    handleGenerateSchedule();
+                    event.preventDefault();
+
+                    if (schedulePrompt.trim()) {
+                      handleGenerateSchedule();
+                    }
                   }
                 }}
                 placeholder="e.g. School 8 AM–2 PM, study 2 hours..."
@@ -582,6 +698,16 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
             </div>
 
+            {/* ERROR MESSAGE */}
+            {scheduleError && (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-xs leading-5 text-rose-300"
+              >
+                {scheduleError}
+              </div>
+            )}
+
             <div className="mt-3 flex flex-wrap gap-2">
 
               {[
@@ -592,11 +718,12 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 <button
                   key={suggestion}
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
                     setSchedulePrompt(
                       suggestion
-                    )
-                  }
+                    );
+                    setScheduleError('');
+                  }}
                   className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-[10px] font-medium text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-300"
                 >
                   {suggestion}
@@ -647,7 +774,11 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                         {block.time}
                       </span>
 
-                      <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${getTagBadgeStyle(block.category)}`}>
+                      <span
+                        className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${getTagBadgeStyle(
+                          block.category
+                        )}`}
+                      >
                         {block.category}
                       </span>
 
@@ -701,11 +832,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
             <button
               type="button"
-              onClick={() => {
-                setSelectedTags(['Work']);
-                setCustomTagInput('');
-                setShowAddModal(true);
-              }}
+              onClick={handleOpenAddModal}
               className="flex min-h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 active:scale-95"
             >
               <Plus className="h-4 w-4" />
@@ -718,7 +845,9 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
           <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
 
             <div className="mb-2 flex items-center gap-1.5">
+
               <Tag className="h-3.5 w-3.5 text-indigo-400" />
+
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                 Filter
               </span>
@@ -734,6 +863,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   Clear
                 </button>
               )}
+
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
@@ -758,17 +888,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     key={tag}
                     type="button"
                     onClick={() =>
-                      setSelectedFilterTag(
-                        tag
-                      )
+                      setSelectedFilterTag(tag)
                     }
                     className={`shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-bold transition ${
                       selectedFilterTag?.toLowerCase() ===
                       tag.toLowerCase()
                         ? 'border-indigo-500/30 bg-indigo-500/15 text-indigo-300'
-                        : getTagBadgeStyle(
-                            tag
-                          )
+                        : getTagBadgeStyle(tag)
                     }`}
                   >
                     {tag}
@@ -799,9 +925,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
               <button
                 type="button"
-                onClick={() =>
-                  setShowAddModal(true)
-                }
+                onClick={handleOpenAddModal}
                 className="mt-4 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white"
               >
                 Add your first item
@@ -839,9 +963,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                         <button
                           type="button"
                           onClick={() =>
-                            onToggleTask(
-                              item.id
-                            )
+                            onToggleTask(item.id)
                           }
                           aria-label={
                             item.completed
@@ -871,11 +993,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                               {item.title}
                             </h3>
 
-                            <span className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
-                              item.type === 'reminder'
-                                ? 'border-purple-500/20 bg-purple-500/10 text-purple-300'
-                                : 'border-sky-500/20 bg-sky-500/10 text-sky-300'
-                            }`}>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
+                                item.type === 'reminder'
+                                  ? 'border-purple-500/20 bg-purple-500/10 text-purple-300'
+                                  : 'border-sky-500/20 bg-sky-500/10 text-sky-300'
+                              }`}
+                            >
                               {item.type}
                             </span>
 
@@ -890,13 +1014,15 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                               </span>
                             )}
 
-                            <span className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
-                              item.priority === 'high'
-                                ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
-                                : item.priority === 'low'
-                                  ? 'border-slate-700 bg-slate-800 text-slate-400'
-                                  : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
-                            }`}>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase ${
+                                item.priority === 'high'
+                                  ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
+                                  : item.priority === 'low'
+                                    ? 'border-slate-700 bg-slate-800 text-slate-400'
+                                    : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+                              }`}
+                            >
                               {item.priority}
                             </span>
 
@@ -904,14 +1030,18 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                           {tags.length > 0 && (
                             <div className="mt-3 flex flex-wrap gap-1.5">
+
                               {tags.map((tag) => (
                                 <span
                                   key={tag}
-                                  className={`rounded-full border px-2 py-1 text-[9px] font-semibold ${getTagBadgeStyle(tag)}`}
+                                  className={`rounded-full border px-2 py-1 text-[9px] font-semibold ${getTagBadgeStyle(
+                                    tag
+                                  )}`}
                                 >
                                   {tag}
                                 </span>
                               ))}
+
                             </div>
                           )}
 
@@ -965,35 +1095,47 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             <div className="mt-5 grid grid-cols-2 gap-3">
 
               <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+
                 <div className="flex items-center gap-2">
+
                   <Flame className="h-4 w-4 text-orange-400" />
+
                   <span className="text-[10px] text-slate-500">
                     Best streak
                   </span>
+
                 </div>
 
                 <p className="mt-2 text-2xl font-bold text-white">
                   {habitStreak}
                 </p>
+
                 <p className="text-[10px] text-slate-500">
                   days
                 </p>
+
               </div>
 
               <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+
                 <div className="flex items-center gap-2">
+
                   <Target className="h-4 w-4 text-emerald-400" />
+
                   <span className="text-[10px] text-slate-500">
                     Today
                   </span>
+
                 </div>
 
                 <p className="mt-2 text-2xl font-bold text-white">
                   {completedHabits}/{habits.length}
                 </p>
+
                 <p className="text-[10px] text-slate-500">
                   completed
                 </p>
+
               </div>
 
             </div>
@@ -1038,9 +1180,12 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     <button
                       type="button"
                       onClick={() =>
-                        onToggleHabit(
-                          habit.id
-                        )
+                        onToggleHabit(habit.id)
+                      }
+                      aria-label={
+                        habit.completedToday
+                          ? 'Mark habit incomplete'
+                          : 'Mark habit complete'
                       }
                       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition ${
                         habit.completedToday
@@ -1070,10 +1215,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     <div className="text-right">
 
                       <div className="flex items-center gap-1">
+
                         <Flame className="h-4 w-4 text-orange-400" />
+
                         <span className="text-sm font-bold text-orange-300">
                           {habit.streak}
                         </span>
+
                       </div>
 
                       <p className="text-[9px] text-slate-600">
@@ -1120,6 +1268,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
 
               <div>
+
                 <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-indigo-400">
                   Planner
                 </p>
@@ -1127,6 +1276,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 <h2 className="mt-1 text-lg font-bold text-white">
                   Add {newType === 'task' ? 'Task' : 'Reminder'}
                 </h2>
+
               </div>
 
               <button
@@ -1134,6 +1284,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 onClick={() =>
                   setShowAddModal(false)
                 }
+                aria-label="Close add item modal"
                 className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-slate-400 transition hover:text-white"
               >
                 <X className="h-4 w-4" />
@@ -1180,6 +1331,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
               {/* TITLE */}
               <div>
+
                 <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Title
                 </label>
@@ -1193,14 +1345,17 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     )
                   }
                   placeholder="What do you need to do?"
+                  maxLength={200}
                   className="min-h-11 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-sm text-white outline-none focus:border-indigo-500"
                 />
+
               </div>
 
               {/* TIME + PRIORITY */}
               <div className="grid grid-cols-2 gap-3">
 
                 <div>
+
                   <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Time
                   </label>
@@ -1212,11 +1367,14 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                         event.target.value
                       )
                     }
+                    maxLength={30}
                     className="min-h-11 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-xs text-white outline-none focus:border-indigo-500"
                   />
+
                 </div>
 
                 <div>
+
                   <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Priority
                   </label>
@@ -1236,13 +1394,17 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                     <option value="low">
                       Low
                     </option>
+
                     <option value="normal">
                       Normal
                     </option>
+
                     <option value="high">
                       High
                     </option>
+
                   </select>
+
                 </div>
 
               </div>
@@ -1259,25 +1421,19 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   {PRESET_TAGS.map((tag) => {
 
                     const active =
-                      selectedTags.includes(
-                        tag
-                      );
+                      selectedTags.includes(tag);
 
                     return (
                       <button
                         key={tag}
                         type="button"
                         onClick={() =>
-                          handleTogglePresetTag(
-                            tag
-                          )
+                          handleTogglePresetTag(tag)
                         }
                         className={`rounded-full border px-2.5 py-1.5 text-[9px] font-bold transition ${
                           active
                             ? 'border-indigo-500/40 bg-indigo-500/15 text-indigo-300'
-                            : getTagBadgeStyle(
-                                tag
-                              )
+                            : getTagBadgeStyle(tag)
                         }`}
                       >
                         {tag}
@@ -1287,7 +1443,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
 
                 </div>
 
-                {/* SELECTED CUSTOM TAGS */}
+                {/* SELECTED TAGS */}
                 {selectedTags.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1.5">
 
@@ -1296,13 +1452,13 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                         key={tag}
                         type="button"
                         onClick={() =>
-                          handleRemoveTag(
-                            tag
-                          )
+                          handleRemoveTag(tag)
                         }
+                        aria-label={`Remove ${tag} tag`}
                         className="flex items-center gap-1 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-1 text-[9px] font-semibold text-indigo-300"
                       >
                         {tag}
+
                         <X className="h-2.5 w-2.5" />
                       </button>
                     ))}
@@ -1310,6 +1466,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                   </div>
                 )}
 
+                {/* CUSTOM TAG */}
                 <div className="mt-2 flex gap-2">
 
                   <input
@@ -1320,23 +1477,21 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                       )
                     }
                     onKeyDown={(event) => {
-                      if (
-                        event.key === 'Enter'
-                      ) {
+                      if (event.key === 'Enter') {
                         event.preventDefault();
                         handleAddCustomTag();
                       }
                     }}
                     placeholder="Custom tag..."
+                    maxLength={40}
                     className="min-h-10 flex-1 rounded-xl border border-slate-800 bg-slate-900 px-3 text-xs text-white outline-none focus:border-indigo-500"
                   />
 
                   <button
                     type="button"
-                    onClick={
-                      handleAddCustomTag
-                    }
-                    className="rounded-xl border border-slate-800 bg-slate-900 px-3 text-xs font-bold text-slate-300 hover:text-white"
+                    onClick={handleAddCustomTag}
+                    disabled={!customTagInput.trim()}
+                    className="rounded-xl border border-slate-800 bg-slate-900 px-3 text-xs font-bold text-slate-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Add
                   </button>
@@ -1361,7 +1516,7 @@ export const PlannerView: React.FC<PlannerViewProps> = ({
                 <button
                   type="submit"
                   disabled={!newTitle.trim()}
-                  className="min-h-11 flex-1 rounded-xl bg-indigo-600 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 disabled:opacity-40"
+                  className="min-h-11 flex-1 rounded-xl bg-indigo-600 text-xs font-bold text-white shadow-lg shadow-indigo-900/30 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Create Item
                 </button>
