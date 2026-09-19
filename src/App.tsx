@@ -1258,7 +1258,15 @@ export default function App() {
 
           {currentTab ===
             'learn' && (
-            <LearnView />
+            <LearnView
+              onOpenLesson={(topic) => {
+                setCurrentTab('home');
+
+                handleSendMessage(
+                  `Teach me about ${topic}. Explain it step by step in a simple and practical way.`
+                );
+              }}
+            />
           )}
 
           {currentTab ===
