@@ -1066,6 +1066,282 @@ ${text}
 );
 
 /* =========================================================
+   AI SMART SCHEDULE
+========================================================= */
+
+app.post(
+  "/api/ai/smart-schedule",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const prompt =
+        cleanText(
+          req.body?.prompt,
+          1500
+        );
+
+      const date =
+        cleanText(
+          req.body?.date ||
+            new Date()
+              .toISOString()
+              .split("T")[0],
+          30
+        );
+
+      if (!prompt) {
+        return res.status(400).json({
+          error:
+            "Schedule prompt is required.",
+        });
+      }
+
+      const ai = getAI();
+
+      /* -----------------------------------------------------
+         OFFLINE FALLBACK
+      ----------------------------------------------------- */
+
+      if (!ai) {
+        return res.json({
+          schedule: [
+            {
+              time: "08:00",
+              title: "Start your day",
+              category: "General",
+              durationMinutes: 30,
+              notes:
+                "AI is offline. This is a basic fallback schedule.",
+            },
+
+            {
+              time: "10:00",
+              title:
+                "Work on your main priority",
+              category: "Priority",
+              durationMinutes: 60,
+              notes: "",
+            },
+
+            {
+              time: "14:00",
+              title:
+                "Review tasks and continue",
+              category: "Productivity",
+              durationMinutes: 60,
+              notes: "",
+            },
+
+            {
+              time: "18:00",
+              title:
+                "Review the day",
+              category: "Planning",
+              durationMinutes: 30,
+              notes: "",
+            },
+          ],
+
+          date,
+
+          offline: true,
+        });
+      }
+
+      /* -----------------------------------------------------
+         AI SCHEDULE PROMPT
+      ----------------------------------------------------- */
+
+      const schedulePrompt = `
+Create a practical daily schedule for the user.
+
+Date: ${date}
+
+User request:
+${prompt}
+
+Return ONLY valid JSON in exactly this shape:
+
+{
+  "schedule": [
+    {
+      "time": "08:00",
+      "title": "Task title",
+      "category": "Category",
+      "durationMinutes": 60,
+      "notes": "Optional short note"
+    }
+  ]
+}
+
+Rules:
+
+- Create 3 to 12 useful schedule items.
+- Use 24-hour HH:MM time.
+- Keep titles short and actionable.
+- durationMinutes must be a positive integer when included.
+- Do not invent appointments or commitments that the user did not provide.
+- Respect explicit times in the user's request.
+- If the user gives no times, choose sensible times with reasonable spacing.
+- Avoid overlapping items.
+- Include breaks when the request represents a long day.
+- Keep notes short.
+- Return JSON only.
+- Do not use markdown.
+`;
+
+      const response =
+        await withTimeout(
+          ai.models.generateContent({
+            model:
+              "gemini-3.8-flash",
+
+            contents:
+              schedulePrompt,
+
+            config: {
+              responseMimeType:
+                "application/json",
+            },
+          })
+        );
+
+      const raw =
+        response.text?.trim() || "";
+
+      let parsed: any;
+
+      /* -----------------------------------------------------
+         PARSE AI JSON
+      ----------------------------------------------------- */
+
+      try {
+        parsed =
+          JSON.parse(raw);
+      } catch {
+        const cleaned =
+          raw
+            .replace(
+              /^```json\s*/i,
+              ""
+            )
+            .replace(
+              /^```\s*/i,
+              ""
+            )
+            .replace(
+              /\s*```$/i,
+              ""
+            )
+            .trim();
+
+        parsed =
+          JSON.parse(cleaned);
+      }
+
+      const sourceSchedule =
+        Array.isArray(
+          parsed?.schedule
+        )
+          ? parsed.schedule
+          : [];
+
+      /* -----------------------------------------------------
+         VALIDATE / NORMALIZE SCHEDULE
+      ----------------------------------------------------- */
+
+      const schedule =
+        sourceSchedule
+          .slice(0, 12)
+          .map(
+            (item: any) => ({
+              time: cleanText(
+                item?.time,
+                10
+              ),
+
+              title: cleanText(
+                item?.title,
+                160
+              ),
+
+              category:
+                cleanText(
+                  item?.category,
+                  60
+                ) || "General",
+
+              durationMinutes:
+                Number.isFinite(
+                  Number(
+                    item?.durationMinutes
+                  )
+                )
+                  ? Math.max(
+                      1,
+                      Math.round(
+                        Number(
+                          item.durationMinutes
+                        )
+                      )
+                    )
+                  : undefined,
+
+              notes: cleanText(
+                item?.notes,
+                300
+              ),
+            })
+          )
+          .filter(
+            (item: any) =>
+              /^([01]\d|2[0-3]):[0-5]\d$/.test(
+                item.time
+              ) &&
+              Boolean(
+                item.title
+              )
+          );
+
+      if (
+        schedule.length === 0
+      ) {
+        return res.status(502).json({
+          error:
+            "The AI returned an invalid schedule.",
+
+          schedule: [],
+        });
+      }
+
+      return res.json({
+        schedule,
+
+        date,
+
+        offline: false,
+      });
+
+    } catch (error: any) {
+      console.error(
+        "[Nodysom Smart Schedule] Error:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          error?.message ||
+          "Smart schedule generation failed.",
+
+        schedule: [],
+      });
+    }
+  }
+);
+
+/* =========================================================
    VITE / PRODUCTION SERVER
 ========================================================= */
 
