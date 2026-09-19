@@ -33,14 +33,15 @@ export interface AgentAction {
   title: string;
 
   date?: string;
-
   time?: string;
-
   category?: string;
-
   amount?: number;
-
   confirmedRequired?: boolean;
+}
+
+export interface AgentToolCall {
+  tool: AgentToolName;
+  input: string;
 }
 
 export interface AgentAIAnswer {
@@ -52,6 +53,13 @@ export interface AgentAIAnswer {
 
   newMemory?:
     | string
+    | null;
+
+  /*
+   * Gemini can request a tool.
+   */
+  toolCall?:
+    | AgentToolCall
     | null;
 }
 
@@ -77,22 +85,30 @@ export interface AgentResponse {
   toolsUsed?: string[];
 }
 
-const MAX_AGENT_STEPS = 4;
+/*
+ * Maximum number of agent iterations.
+ *
+ * Example:
+ *
+ * Step 1 -> calculator
+ * Step 2 -> time
+ * Step 3 -> final answer
+ */
+const MAX_AGENT_STEPS = 6;
 
 const MAX_MESSAGE_LENGTH = 4000;
 
 const MAX_TOOL_RESULT_LENGTH = 2000;
 
-/**
- * Keep tool output bounded before giving it
- * back to the AI.
+/*
+ * Keep tool results small before returning
+ * them to the model.
  */
 function sanitizeToolResult(
   result: string
 ): string {
-  const value = String(
-    result || ''
-  ).trim();
+  const value =
+    String(result || '').trim();
 
   if (!value) {
     return 'Tool returned an empty result.';
@@ -114,57 +130,68 @@ function sanitizeToolResult(
   return value;
 }
 
-/**
- * Verify that a successful tool result
- * actually contains usable output.
+/*
+ * Verify that the tool actually produced
+ * usable output.
  */
 function verifyToolResult(
   result: string
 ): boolean {
-  const value = String(
-    result || ''
-  ).trim();
+  const value =
+    String(result || '').trim();
 
   return (
     value.length > 0 &&
     !value
       .toLowerCase()
-      .includes('tool execution failed')
+      .includes(
+        'tool execution failed'
+      )
   );
 }
 
-/**
- * Prevent the same tool from being
- * executed repeatedly with exactly the
- * same input during one agent run.
+/*
+ * Create a unique identifier for a tool call.
+ *
+ * This prevents:
+ *
+ * calculator -> same input
+ * calculator -> same input
+ * calculator -> same input
+ *
+ * forever.
  */
 function createToolFingerprint(
   tool: AgentToolName,
   input: string
 ): string {
-  return `${tool}:${input.trim()}`;
+  return (
+    `${tool}:${input.trim()}`
+  );
 }
 
-/**
- * Run the general-purpose agent.
+/*
+ * General-purpose Nodysom AI Agent Controller.
  *
- * Flow:
+ * FLOW:
  *
  * USER
  *   ↓
- * Understand
+ * UNDERSTAND
  *   ↓
- * Plan
+ * PLAN
  *   ↓
- * Choose tool
+ * CHOOSE TOOL
  *   ↓
- * Execute
+ * EXECUTE
  *   ↓
- * Verify
+ * VERIFY
  *   ↓
- * Re-plan if necessary
+ * RETURN RESULT TO AI
  *   ↓
- * Final AI answer
+ * RE-PLAN
+ *   ↓
+ * ANOTHER TOOL OR FINAL ANSWER
  */
 export async function runAgent(
   request: AgentRequest,
@@ -174,14 +201,16 @@ export async function runAgent(
     toolResult?: string
   ) => Promise<AgentAIAnswer>
 ): Promise<AgentResponse> {
+  /*
+   * -----------------------------------------
+   * INPUT VALIDATION
+   * -----------------------------------------
+   */
+
   const message =
     String(
       request.message || ''
     ).trim();
-
-  // -----------------------------------------
-  // INPUT VALIDATION
-  // -----------------------------------------
 
   if (!message) {
     throw new Error(
@@ -207,24 +236,19 @@ export async function runAgent(
     );
   }
 
-  // -----------------------------------------
-  // AGENT STATE
-  // -----------------------------------------
-
-  let currentMessage =
-    message;
+  /*
+   * -----------------------------------------
+   * AGENT STATE
+   * -----------------------------------------
+   */
 
   let latestToolResult:
     | string
     | undefined;
 
-  let usedTool = false;
-
   let lastTool:
     | AgentToolName
     | undefined;
-
-  let lastToolInput = '';
 
   let detectedAction:
     | AgentAction
@@ -234,61 +258,129 @@ export async function runAgent(
     | string
     | null = null;
 
+  let usedTool = false;
+
   const toolsUsed: string[] = [];
 
+  /*
+   * Prevent infinite repeated calls.
+   */
   const executedTools =
     new Set<string>();
 
-  // -----------------------------------------
-  // AGENT LOOP
-  // -----------------------------------------
+  /*
+   * -----------------------------------------
+   * AGENT LOOP
+   * -----------------------------------------
+   */
 
   for (
     let step = 1;
     step <= MAX_AGENT_STEPS;
     step += 1
   ) {
-    /*
-     * STEP 1
-     *
-     * Understand the current request
-     * and determine whether a local
-     * deterministic tool is needed.
-     */
-    const plan =
-      detectTool(
-        currentMessage
-      );
+    let modelResult:
+      | AgentAIAnswer;
 
     /*
      * ---------------------------------------
-     * NORMAL AI PATH
+     * STEP 1
      * ---------------------------------------
      *
-     * If no local tool is required,
-     * let the AI produce the answer.
+     * Deterministic local tool detection.
+     *
+     * This keeps calculator/time/text_stats
+     * working even when Gemini does not
+     * explicitly request them.
      */
+
     if (
-      plan.intent !== 'tool' ||
-      !plan.tool
+      step === 1 &&
+      !latestToolResult
     ) {
-      const aiResult =
+      const localPlan =
+        detectTool(
+          message
+        );
+
+      if (
+        localPlan.intent ===
+          'tool' &&
+        localPlan.tool
+      ) {
+        modelResult = {
+          reply: '',
+
+          toolCall: {
+            tool:
+              localPlan.tool,
+
+            input:
+              localPlan.input ||
+              '',
+          },
+
+          detectedAction:
+            null,
+
+          newMemory:
+            null,
+        };
+      } else {
+        /*
+         * Normal Gemini request.
+         */
+        modelResult =
+          await aiAnswer(
+            request
+          );
+      }
+    } else {
+      /*
+       * -------------------------------------
+       * RE-PLANNING
+       * -------------------------------------
+       *
+       * Gemini receives the latest tool
+       * result and decides what happens next.
+       */
+
+      modelResult =
         await aiAnswer(
           request,
           latestToolResult
         );
+    }
 
-      detectedAction =
-        aiResult.detectedAction ||
-        null;
+    /*
+     * ---------------------------------------
+     * SAVE AI METADATA
+     * ---------------------------------------
+     */
 
-      newMemory =
-        aiResult.newMemory ||
-        null;
+    detectedAction =
+      modelResult.detectedAction ||
+      null;
 
+    newMemory =
+      modelResult.newMemory ||
+      null;
+
+    /*
+     * ---------------------------------------
+     * FINAL ANSWER
+     * ---------------------------------------
+     *
+     * No tool call means Gemini has finished.
+     */
+
+    if (
+      !modelResult.toolCall
+    ) {
       return {
         reply:
-          aiResult.reply,
+          modelResult.reply ||
+          'I could not generate a response.',
 
         usedTool,
 
@@ -310,38 +402,85 @@ export async function runAgent(
 
     /*
      * ---------------------------------------
-     * TOOL PLANNING
+     * TOOL REQUEST
      * ---------------------------------------
      */
 
     const toolName =
-      plan.tool;
+      modelResult.toolCall.tool;
 
     const toolInput =
       String(
-        plan.input || ''
+        modelResult.toolCall
+          .input || ''
       ).trim();
 
-    const fingerprint =
-      createToolFingerprint(
-        toolName,
-        toolInput
-      );
+    /*
+     * ---------------------------------------
+     * VALID TOOL CHECK
+     * ---------------------------------------
+     */
+
+    const validTools:
+      AgentToolName[] = [
+        'calculator',
+        'time',
+        'text_stats',
+      ];
+
+    if (
+      !validTools.includes(
+        toolName
+      )
+    ) {
+      return {
+        reply:
+          `The requested tool "${toolName}" is not available.`,
+
+        usedTool,
+
+        tool:
+          lastTool,
+
+        toolResult:
+          latestToolResult,
+
+        detectedAction,
+
+        newMemory,
+
+        steps: step,
+
+        toolsUsed,
+      };
+    }
 
     /*
      * ---------------------------------------
      * LOOP PROTECTION
      * ---------------------------------------
-     *
-     * Do not execute the exact same
-     * tool/input combination forever.
      */
+
+    const toolFingerprint =
+      createToolFingerprint(
+        toolName,
+        toolInput
+      );
+
     if (
       executedTools.has(
-        fingerprint
+        toolFingerprint
       )
     ) {
-      const aiResult =
+      /*
+       * Same exact tool call was already
+       * executed.
+       *
+       * Ask Gemini to finish using the
+       * available result instead of looping.
+       */
+
+      const fallback =
         await aiAnswer(
           request,
           latestToolResult
@@ -349,7 +488,8 @@ export async function runAgent(
 
       return {
         reply:
-          aiResult.reply,
+          fallback.reply ||
+          'I stopped because the same tool request was repeated.',
 
         usedTool,
 
@@ -360,12 +500,12 @@ export async function runAgent(
           latestToolResult,
 
         detectedAction:
-          aiResult.detectedAction ||
-          null,
+          fallback.detectedAction ||
+          detectedAction,
 
         newMemory:
-          aiResult.newMemory ||
-          null,
+          fallback.newMemory ||
+          newMemory,
 
         steps: step,
 
@@ -374,12 +514,12 @@ export async function runAgent(
     }
 
     executedTools.add(
-      fingerprint
+      toolFingerprint
     );
 
     /*
      * ---------------------------------------
-     * TOOL EXECUTION
+     * EXECUTE TOOL
      * ---------------------------------------
      */
 
@@ -394,16 +534,13 @@ export async function runAgent(
     lastTool =
       tool.tool;
 
-    lastToolInput =
-      toolInput;
-
     toolsUsed.push(
       tool.tool
     );
 
     /*
      * ---------------------------------------
-     * TOOL FAILURE
+     * TOOL ERROR
      * ---------------------------------------
      */
 
@@ -420,11 +557,9 @@ export async function runAgent(
         toolResult:
           tool.result,
 
-        detectedAction:
-          null,
+        detectedAction,
 
-        newMemory:
-          null,
+        newMemory,
 
         steps: step,
 
@@ -434,7 +569,7 @@ export async function runAgent(
 
     /*
      * ---------------------------------------
-     * TOOL RESULT SANITIZATION
+     * SANITIZE RESULT
      * ---------------------------------------
      */
 
@@ -445,7 +580,7 @@ export async function runAgent(
 
     /*
      * ---------------------------------------
-     * TOOL RESULT VERIFICATION
+     * VERIFY RESULT
      * ---------------------------------------
      */
 
@@ -466,11 +601,9 @@ export async function runAgent(
         toolResult:
           safeResult,
 
-        detectedAction:
-          null,
+        detectedAction,
 
-        newMemory:
-          null,
+        newMemory,
 
         steps: step,
 
@@ -478,76 +611,44 @@ export async function runAgent(
       };
     }
 
+    /*
+     * ---------------------------------------
+     * SAVE TOOL RESULT
+     * ---------------------------------------
+     */
+
     latestToolResult =
       safeResult;
 
     /*
      * ---------------------------------------
-     * AI VERIFICATION / NEXT DECISION
+     * CONTINUE AGENT LOOP
      * ---------------------------------------
      *
-     * The AI receives the tool result.
+     * IMPORTANT:
      *
-     * It can:
+     * We do NOT return here.
      *
-     * 1. Produce the final answer.
-     * 2. Interpret the result and answer.
+     * The next iteration gives the tool
+     * result back to Gemini.
      *
-     * The controller can then stop safely.
+     * Gemini can then:
      *
-     * Future versions can replace this
-     * section with native Gemini function
-     * calling for true model-driven
-     * multi-tool planning.
+     * 1. Request another tool.
+     *
+     * OR
+     *
+     * 2. Return the final answer.
      */
-    const aiResult =
-      await aiAnswer(
-        request,
-        safeResult
-      );
 
-    detectedAction =
-      aiResult.detectedAction ||
-      null;
-
-    newMemory =
-      aiResult.newMemory ||
-      null;
-
-    /*
-     * ---------------------------------------
-     * FINAL RESPONSE
-     * ---------------------------------------
-     *
-     * Current AI callback returns the
-     * user-facing answer after receiving
-     * the tool result.
-     */
-    return {
-      reply:
-        aiResult.reply,
-
-      usedTool: true,
-
-      tool:
-        tool.tool,
-
-      toolResult:
-        safeResult,
-
-      detectedAction,
-
-      newMemory,
-
-      steps: step,
-
-      toolsUsed,
-    };
+    continue;
   }
 
-  // -----------------------------------------
-  // SAFETY FALLBACK
-  // -----------------------------------------
+  /*
+   * -----------------------------------------
+   * MAX STEP SAFETY
+   * -----------------------------------------
+   */
 
   return {
     reply:
