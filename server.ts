@@ -325,7 +325,79 @@ Goals: ${cleanText(
 }
 
 /* =========================================================
+   GEMINI FUNCTION DECLARATIONS
+========================================================= */
+
+const GEMINI_AGENT_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: "calculator",
+
+        description:
+          "Safely evaluates a mathematical expression. Use this for arithmetic calculations, percentages, parentheses, addition, subtraction, multiplication, division, and modulo.",
+
+        parameters: {
+          type: "object",
+
+          properties: {
+            input: {
+              type: "string",
+
+              description:
+                "The mathematical expression to calculate. Example: 25 * 4 + 10",
+            },
+          },
+
+          required: [
+            "input",
+          ],
+        },
+      },
+
+      {
+        name: "time",
+
+        description:
+          "Returns the current date and time.",
+
+        parameters: {
+          type: "object",
+
+          properties: {},
+        },
+      },
+
+      {
+        name: "text_stats",
+
+        description:
+          "Calculates basic statistics for text, including word count and character count.",
+
+        parameters: {
+          type: "object",
+
+          properties: {
+            input: {
+              type: "string",
+
+              description:
+                "The text that should be analyzed.",
+            },
+          },
+
+          required: [
+            "input",
+          ],
+        },
+      },
+    ],
+  },
+];
+
+/* =========================================================
    AGENT AI ANSWER
+   GEMINI + NATIVE FUNCTION CALLING
 ========================================================= */
 
 async function generateAgentAnswer(
@@ -347,9 +419,14 @@ async function generateAgentAnswer(
             MAX_MESSAGE_LENGTH
           )}". Gemini is not connected yet.`,
 
-      detectedAction: null,
+      detectedAction:
+        null,
 
-      newMemory: null,
+      newMemory:
+        null,
+
+      toolCall:
+        null,
     };
   }
 
@@ -368,17 +445,46 @@ async function generateAgentAnswer(
       request
     );
 
+  /* -------------------------------------------------------
+     TOOL RESULT CONTEXT
+  ------------------------------------------------------- */
+
   const toolContext =
     toolResult
       ? `
-TOOL RESULT:
+==================================================
+EXECUTED TOOL RESULT
+==================================================
 
 ${toolResult}
 
-Use this result as authoritative.
+This tool result is authoritative.
+
 Do not invent a different result.
+
+Use this result when producing the final answer.
+
+If another tool is genuinely required, request it.
 `
-      : "";
+      : `
+==================================================
+TOOLS
+==================================================
+
+Available tools:
+
+- calculator
+- time
+- text_stats
+
+Use a tool when it is necessary for accuracy.
+
+If no tool is needed, answer normally.
+`;
+
+  /* -------------------------------------------------------
+     SYSTEM INSTRUCTION
+  ------------------------------------------------------- */
 
   const systemInstruction = `
 You are Nodysom AI.
@@ -386,6 +492,7 @@ You are Nodysom AI.
 You are a general-purpose universal AI agent.
 
 You are NOT limited to:
+
 - scholarships
 - jobs
 - education
@@ -393,24 +500,72 @@ You are NOT limited to:
 
 You can help with many legitimate general tasks.
 
-Your responsibilities:
+==================================================
+CORE AGENT BEHAVIOR
+==================================================
+
+Your job is to:
 
 1. Understand the user's request.
-2. Use available tool results.
-3. Reason carefully.
-4. Give accurate answers.
-5. Be concise for simple questions.
-6. Give step-by-step guidance when useful.
-7. Never claim an action was completed when it was not.
-8. Never invent tool results.
+2. Decide whether a tool is needed.
+3. Request the correct tool when needed.
+4. Use the returned tool result.
+5. Continue reasoning when another step is required.
+6. Give a useful final answer.
+7. Never invent tool results.
+8. Never claim an action happened when it did not.
 9. Respect the user's preferred language.
-10. Clearly state uncertainty when information is uncertain.
+10. State uncertainty when appropriate.
 
-SMART ACTIONS:
+==================================================
+AVAILABLE FUNCTION TOOLS
+==================================================
 
-If the user asks Nodysom to create, add, schedule,
-remind, plan, or organize something, create a
-detectedAction.
+calculator
+
+Use calculator for mathematical calculations.
+
+Examples:
+
+"What is 25 * 40?"
+
+"Calculate 15% of 800."
+
+"(20 + 5) * 4"
+
+Do not invent mathematical results.
+
+--------------------------------------------------
+
+time
+
+Use time when the user asks for the current
+date or current time.
+
+--------------------------------------------------
+
+text_stats
+
+Use text_stats when the user asks for:
+
+- word count
+- character count
+- text statistics
+
+==================================================
+SMART ACTIONS
+==================================================
+
+If the user asks Nodysom to:
+
+- create
+- add
+- schedule
+- remind
+- plan
+- organize
+
+something, create a detectedAction proposal.
 
 Examples:
 
@@ -422,12 +577,15 @@ Examples:
 
 "Create a task to finish my website"
 
-The detectedAction is only a proposal.
-The frontend will ask the user for confirmation.
+The detectedAction is ONLY a proposal.
 
-Do NOT claim that the action has already been added.
+The frontend must ask the user for confirmation.
 
-MEMORY:
+Never claim the action has already been added.
+
+==================================================
+MEMORY
+==================================================
 
 Only create newMemory when the user explicitly
 shares a useful personal fact, preference, goal,
@@ -442,9 +600,23 @@ Examples:
 
 "My goal is to become a software developer."
 
-Do NOT create memories from ordinary questions.
+Do not create memories from ordinary questions.
 
-Return ONLY valid JSON.
+==================================================
+LANGUAGE
+==================================================
+
+Respect the user's preferred language.
+
+If the user writes in Swahili, respond in Swahili
+unless another language is requested.
+
+==================================================
+FINAL RESPONSE FORMAT
+==================================================
+
+When you are ready to answer without requesting
+another tool, return ONLY valid JSON.
 
 Required format:
 
@@ -484,19 +656,32 @@ REMINDER
 SCHEDULE
 BUDGET
 
-USER PROFILE:
+==================================================
+USER PROFILE
+==================================================
+
 ${profileText}
 
-MEMORIES:
+==================================================
+MEMORIES
+==================================================
+
 ${memoryText}
 
-RECENT CONVERSATION:
+==================================================
+RECENT CONVERSATION
+==================================================
+
 ${historyText}
 
 ${toolContext}
 `;
 
   try {
+    /* -----------------------------------------------------
+       CALL GEMINI
+    ----------------------------------------------------- */
+
     const response =
       await withTimeout(
         ai.models.generateContent({
@@ -518,17 +703,150 @@ ${toolContext}
           config: {
             systemInstruction,
 
-            responseMimeType:
-              "application/json",
+            tools:
+              GEMINI_AGENT_TOOLS,
           },
         })
       );
+
+    /* -----------------------------------------------------
+       CHECK FUNCTION CALL
+    ----------------------------------------------------- */
+
+    const functionCalls =
+      response.functionCalls || [];
+
+    if (
+      Array.isArray(functionCalls) &&
+      functionCalls.length > 0
+    ) {
+      const call =
+        functionCalls[0];
+
+      const functionName =
+        cleanText(
+          call?.name,
+          100
+        );
+
+      const args =
+        call?.args &&
+        typeof call.args ===
+          "object"
+          ? call.args as Record<
+              string,
+              unknown
+            >
+          : {};
+
+      let input = "";
+
+      if (
+        typeof args.input ===
+        "string"
+      ) {
+        input =
+          args.input;
+      }
+
+      /*
+       * The time tool normally needs no input.
+       */
+
+      if (
+        functionName ===
+          "time" &&
+        !input
+      ) {
+        input =
+          "current";
+      }
+
+      /*
+       * Fallback for unexpected arguments.
+       */
+
+      if (!input) {
+        input =
+          JSON.stringify(
+            args
+          );
+      }
+
+      const allowedTools = [
+        "calculator",
+        "time",
+        "text_stats",
+      ];
+
+      if (
+        !allowedTools.includes(
+          functionName
+        )
+      ) {
+        return {
+          reply:
+            `Gemini requested an unavailable tool: ${functionName}`,
+
+          detectedAction:
+            null,
+
+          newMemory:
+            null,
+
+          toolCall:
+            null,
+        };
+      }
+
+      return {
+        reply:
+          "",
+
+        detectedAction:
+          null,
+
+        newMemory:
+          null,
+
+        toolCall: {
+          tool:
+            functionName as
+              | "calculator"
+              | "time"
+              | "text_stats",
+
+          input,
+        },
+      };
+    }
+
+    /* -----------------------------------------------------
+       NORMAL RESPONSE
+    ----------------------------------------------------- */
 
     const raw =
       response.text?.trim() ||
       "";
 
-    let parsed: any;
+    if (!raw) {
+      return {
+        reply:
+          "I could not generate a response.",
+
+        detectedAction:
+          null,
+
+        newMemory:
+          null,
+
+        toolCall:
+          null,
+      };
+    }
+
+    let parsed:
+      any;
 
     /* -----------------------------------------------------
        PARSE JSON
@@ -554,12 +872,38 @@ ${toolContext}
           )
           .trim();
 
-      parsed =
-        JSON.parse(cleaned);
+      try {
+        parsed =
+          JSON.parse(
+            cleaned
+          );
+      } catch {
+        /*
+         * Gemini occasionally returns plain text.
+         * Do not crash the entire agent.
+         */
+
+        return {
+          reply:
+            cleanText(
+              raw,
+              10000
+            ),
+
+          detectedAction:
+            null,
+
+          newMemory:
+            null,
+
+          toolCall:
+            null,
+        };
+      }
     }
 
     /* -----------------------------------------------------
-       RESPONSE
+       REPLY
     ----------------------------------------------------- */
 
     const reply =
@@ -613,19 +957,22 @@ ${toolContext}
             cleanText(
               action.date,
               30
-            ) || undefined,
+            ) ||
+            undefined,
 
           time:
             cleanText(
               action.time,
               30
-            ) || undefined,
+            ) ||
+            undefined,
 
           category:
             cleanText(
               action.category,
               80
-            ) || "General",
+            ) ||
+            "General",
 
           amount:
             Number.isFinite(
@@ -652,7 +999,12 @@ ${toolContext}
       cleanText(
         parsed?.newMemory,
         MAX_MEMORY_LENGTH
-      ) || null;
+      ) ||
+      null;
+
+    /* -----------------------------------------------------
+       FINAL AGENT ANSWER
+    ----------------------------------------------------- */
 
     return {
       reply,
@@ -660,6 +1012,9 @@ ${toolContext}
       detectedAction,
 
       newMemory,
+
+      toolCall:
+        null,
     };
   } catch (error: any) {
     console.error(
@@ -677,6 +1032,9 @@ ${toolContext}
 
         newMemory:
           null,
+
+        toolCall:
+          null,
       };
     }
 
@@ -688,6 +1046,9 @@ ${toolContext}
         null,
 
       newMemory:
+        null,
+
+      toolCall:
         null,
     };
   }
@@ -704,7 +1065,8 @@ app.get(
     res
   ) => {
     res.json({
-      status: "ok",
+      status:
+        "ok",
 
       appName:
         "Nodysom AI",
@@ -715,6 +1077,9 @@ app.get(
       aiProvider:
         "Google Gemini",
 
+      model:
+        "gemini-3.8-flash",
+
       hasGeminiKey:
         Boolean(
           process.env.GEMINI_API_KEY &&
@@ -723,10 +1088,14 @@ app.get(
         ),
 
       agent: {
-        enabled: true,
+        enabled:
+          true,
 
         endpoint:
           "/api/agent",
+
+        architecture:
+          "Gemini Function Calling + Agent Controller",
 
         tools: [
           "calculator",
@@ -819,19 +1188,23 @@ app.post(
       };
 
       /*
-       * AGENT LOOP
+       * =====================================================
+       * TRUE AGENT LOOP
        *
        * Understand
        *      ↓
        * Plan
        *      ↓
-       * Choose Tool
+       * Gemini chooses tool
        *      ↓
-       * Execute
+       * Execute tool
        *      ↓
-       * Check Result
+       * Verify result
        *      ↓
-       * AI Answer
+       * Gemini receives result
+       *      ↓
+       * Final answer
+       * =====================================================
        */
 
       const result =
@@ -854,7 +1227,7 @@ app.post(
         startedAt;
 
       console.log(
-        `[Nodysom Agent] ${latency}ms | tool=${result.tool || "none"}`
+        `[Nodysom Agent] ${latency}ms | tool=${result.tool || "none"} | steps=${result.steps || 0}`
       );
 
       return res.json({
@@ -880,7 +1253,8 @@ app.post(
         reply:
           "Nodysom AI could not process that request right now. Please try again.",
 
-        usedTool: false,
+        usedTool:
+          false,
 
         detectedAction:
           null,
@@ -896,7 +1270,6 @@ app.post(
 
 /* =========================================================
    LEGACY AI ASSISTANT
-   Keeps compatibility with older clients.
 ========================================================= */
 
 app.post(
@@ -995,7 +1368,8 @@ app.post(
           result.usedTool,
 
         tool:
-          result.tool || null,
+          result.tool ||
+          null,
 
         toolResult:
           result.toolResult ||
@@ -1008,6 +1382,14 @@ app.post(
         newMemory:
           result.newMemory ||
           null,
+
+        steps:
+          result.steps ||
+          0,
+
+        toolsUsed:
+          result.toolsUsed ||
+          [],
       });
     } catch (error: any) {
       console.error(
@@ -1064,24 +1446,29 @@ app.post(
           30
         );
 
-      const ai = getAI();
+      const ai =
+        getAI();
 
       if (!ai) {
         return res.json({
           summary:
             `Search request received: "${query}"`,
 
-          verifiedFacts: [],
+          verifiedFacts:
+            [],
 
-          estimates: [],
+          estimates:
+            [],
 
           uncertainties: [
             "AI search service is not connected.",
           ],
 
-          sources: [],
+          sources:
+            [],
 
-          suggestedActions: [],
+          suggestedActions:
+            [],
         });
       }
 
@@ -1099,7 +1486,10 @@ ${query}
 Respond in ${language}.
 
 Give a concise answer.
-Clearly distinguish known information from uncertainty.
+
+Clearly distinguish known information
+from uncertainty.
+
 Do not invent sources.`,
 
             config: {
@@ -1114,15 +1504,20 @@ Do not invent sources.`,
           response.text?.trim() ||
           "No result available.",
 
-        verifiedFacts: [],
+        verifiedFacts:
+          [],
 
-        estimates: [],
+        estimates:
+          [],
 
-        uncertainties: [],
+        uncertainties:
+          [],
 
-        sources: [],
+        sources:
+          [],
 
-        suggestedActions: [],
+        suggestedActions:
+          [],
       });
     } catch (error: any) {
       console.error(
@@ -1150,10 +1545,11 @@ app.post(
     res
   ) => {
     try {
-      const text = cleanText(
-        req.body?.text,
-        5000
-      );
+      const text =
+        cleanText(
+          req.body?.text,
+          5000
+        );
 
       const targetLanguage =
         cleanText(
@@ -1176,7 +1572,8 @@ app.post(
         });
       }
 
-      const ai = getAI();
+      const ai =
+        getAI();
 
       if (!ai) {
         return res.status(503).json({
@@ -1215,7 +1612,8 @@ ${text}
             model:
               "gemini-3.8-flash",
 
-            contents: prompt,
+            contents:
+              prompt,
 
             config: {
               responseMimeType:
@@ -1225,7 +1623,8 @@ ${text}
         );
 
       const raw =
-        response.text?.trim() || "";
+        response.text?.trim() ||
+        "";
 
       let parsed: {
         translatedText?: unknown;
@@ -1254,7 +1653,9 @@ ${text}
             .trim();
 
         parsed =
-          JSON.parse(cleaned);
+          JSON.parse(
+            cleaned
+          );
       }
 
       const translatedText =
@@ -1337,60 +1738,85 @@ app.post(
         });
       }
 
-      const ai = getAI();
+      const ai =
+        getAI();
 
       if (!ai) {
         return res.json({
           schedule: [
             {
-              time: "08:00",
+              time:
+                "08:00",
+
               title:
                 "Start your day",
+
               category:
                 "General",
+
               durationMinutes:
                 30,
+
               notes:
                 "AI is offline. This is a basic fallback schedule.",
             },
 
             {
-              time: "10:00",
+              time:
+                "10:00",
+
               title:
                 "Work on your main priority",
+
               category:
                 "Priority",
+
               durationMinutes:
                 60,
-              notes: "",
+
+              notes:
+                "",
             },
 
             {
-              time: "14:00",
+              time:
+                "14:00",
+
               title:
                 "Review tasks and continue",
+
               category:
                 "Productivity",
+
               durationMinutes:
                 60,
-              notes: "",
+
+              notes:
+                "",
             },
 
             {
-              time: "18:00",
+              time:
+                "18:00",
+
               title:
                 "Review the day",
+
               category:
                 "Planning",
+
               durationMinutes:
                 30,
-              notes: "",
+
+              notes:
+                "",
             },
           ],
 
           date,
 
-          offline: true,
+          offline:
+            true,
         });
       }
 
@@ -1422,11 +1848,11 @@ Rules:
 - Use 24-hour HH:MM time.
 - Keep titles short and actionable.
 - durationMinutes must be a positive integer when included.
-- Do not invent appointments or commitments that the user did not provide.
+- Do not invent appointments or commitments.
 - Respect explicit times in the user's request.
-- If the user gives no times, choose sensible times with reasonable spacing.
+- If the user gives no times, choose sensible times.
 - Avoid overlapping items.
-- Include breaks when the request represents a long day.
+- Include breaks when appropriate.
 - Keep notes short.
 - Return JSON only.
 - Do not use markdown.
@@ -1449,9 +1875,11 @@ Rules:
         );
 
       const raw =
-        response.text?.trim() || "";
+        response.text?.trim() ||
+        "";
 
-      let parsed: any;
+      let parsed:
+        any;
 
       try {
         parsed =
@@ -1474,7 +1902,9 @@ Rules:
             .trim();
 
         parsed =
-          JSON.parse(cleaned);
+          JSON.parse(
+            cleaned
+          );
       }
 
       const sourceSchedule =
@@ -1489,21 +1919,24 @@ Rules:
           .slice(0, 12)
           .map(
             (item: any) => ({
-              time: cleanText(
-                item?.time,
-                10
-              ),
+              time:
+                cleanText(
+                  item?.time,
+                  10
+                ),
 
-              title: cleanText(
-                item?.title,
-                160
-              ),
+              title:
+                cleanText(
+                  item?.title,
+                  160
+                ),
 
               category:
                 cleanText(
                   item?.category,
                   60
-                ) || "General",
+                ) ||
+                "General",
 
               durationMinutes:
                 Number.isFinite(
@@ -1521,10 +1954,11 @@ Rules:
                     )
                   : undefined,
 
-              notes: cleanText(
-                item?.notes,
-                300
-              ),
+              notes:
+                cleanText(
+                  item?.notes,
+                  300
+                ),
             })
           )
           .filter(
@@ -1538,13 +1972,15 @@ Rules:
           );
 
       if (
-        schedule.length === 0
+        schedule.length ===
+        0
       ) {
         return res.status(502).json({
           error:
             "The AI returned an invalid schedule.",
 
-          schedule: [],
+          schedule:
+            [],
         });
       }
 
@@ -1553,7 +1989,8 @@ Rules:
 
         date,
 
-        offline: false,
+        offline:
+          false,
       });
     } catch (error: any) {
       console.error(
@@ -1566,7 +2003,8 @@ Rules:
           error?.message ||
           "Smart schedule generation failed.",
 
-        schedule: [],
+        schedule:
+          [],
       });
     }
   }
@@ -1585,10 +2023,12 @@ async function startServer() {
     const vite =
       await createViteServer({
         server: {
-          middlewareMode: true,
+          middlewareMode:
+            true,
         },
 
-        appType: "spa",
+        appType:
+          "spa",
       });
 
     app.use(
