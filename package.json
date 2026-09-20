@@ -17,7 +17,6 @@
   "dependencies": {
     "@capacitor/android": "^7.4.4",
     "@capacitor/core": "^7.4.4",
-    "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.57.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
