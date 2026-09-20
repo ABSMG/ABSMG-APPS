@@ -17,6 +17,7 @@ import {
 import {
   runAgent,
   AgentRequest,
+  AgentAIContext,
 } from "./src/agent/agentController";
 
 dotenv.config();
@@ -402,7 +403,8 @@ const GEMINI_AGENT_TOOLS = [
 
 async function generateAgentAnswer(
   request: AgentRequest,
-  toolResult?: string
+  toolResult?: string,
+  context?: AgentAIContext
 ) {
   const ai = getAI();
 
@@ -427,6 +429,12 @@ async function generateAgentAnswer(
 
       toolCall:
         null,
+
+      toolCallId:
+        null,
+
+      modelContent:
+        null,
     };
   }
 
@@ -444,43 +452,6 @@ async function generateAgentAnswer(
     buildAgentContext(
       request
     );
-
-  /* -------------------------------------------------------
-     TOOL RESULT CONTEXT
-  ------------------------------------------------------- */
-
-  const toolContext =
-    toolResult
-      ? `
-==================================================
-EXECUTED TOOL RESULT
-==================================================
-
-${toolResult}
-
-This tool result is authoritative.
-
-Do not invent a different result.
-
-Use this result when producing the final answer.
-
-If another tool is genuinely required, request it.
-`
-      : `
-==================================================
-TOOLS
-==================================================
-
-Available tools:
-
-- calculator
-- time
-- text_stats
-
-Use a tool when it is necessary for accuracy.
-
-If no tool is needed, answer normally.
-`;
 
   /* -------------------------------------------------------
      SYSTEM INSTRUCTION
@@ -567,16 +538,6 @@ If the user asks Nodysom to:
 
 something, create a detectedAction proposal.
 
-Examples:
-
-"Remind me to call John tomorrow at 5pm"
-
-"Add study chemistry to my planner tomorrow"
-
-"Schedule gym at 6pm"
-
-"Create a task to finish my website"
-
 The detectedAction is ONLY a proposal.
 
 The frontend must ask the user for confirmation.
@@ -591,14 +552,6 @@ Only create newMemory when the user explicitly
 shares a useful personal fact, preference, goal,
 habit, or other information that Nodysom should
 remember.
-
-Examples:
-
-"I prefer Swahili."
-
-"Remember that I am learning Python."
-
-"My goal is to become a software developer."
 
 Do not create memories from ordinary questions.
 
@@ -626,36 +579,6 @@ Required format:
   "newMemory": null
 }
 
-When an action is detected:
-
-{
-  "reply": "I'll prepare that for your confirmation.",
-  "detectedAction": {
-    "type": "TASK",
-    "title": "Finish my website",
-    "date": "2026-09-20",
-    "time": "09:00 AM",
-    "category": "General",
-    "confirmedRequired": true
-  },
-  "newMemory": null
-}
-
-When a memory is detected:
-
-{
-  "reply": "I'll remember that.",
-  "detectedAction": null,
-  "newMemory": "The user is learning Python."
-}
-
-Action type must be one of:
-
-TASK
-REMINDER
-SCHEDULE
-BUDGET
-
 ==================================================
 USER PROFILE
 ==================================================
@@ -673,14 +596,92 @@ RECENT CONVERSATION
 ==================================================
 
 ${historyText}
-
-${toolContext}
 `;
 
   try {
-    /* -----------------------------------------------------
+
+    /* =====================================================
+       FIRST / NORMAL GEMINI REQUEST
+    ===================================================== */
+
+    let contents: any[];
+
+    if (
+      toolResult &&
+      context?.modelContent &&
+      context?.toolCallId &&
+      context?.toolName
+    ) {
+
+      /* ===================================================
+         NATIVE FUNCTION RESPONSE
+         
+         Gemini receives:
+         
+         1. Original user message
+         2. Previous model function call
+         3. Function response
+         
+         This preserves the native function-calling chain.
+      =================================================== */
+
+      contents = [
+        {
+          role: "user",
+
+          parts: [
+            {
+              text: message,
+            },
+          ],
+        },
+
+        context.modelContent,
+
+        {
+          role: "user",
+
+          parts: [
+            {
+              functionResponse: {
+                id:
+                  context.toolCallId,
+
+                name:
+                  context.toolName,
+
+                response: {
+                  result:
+                    toolResult,
+                },
+              },
+            },
+          ],
+        },
+      ];
+
+    } else {
+
+      /* ===================================================
+         NORMAL FIRST TURN
+      =================================================== */
+
+      contents = [
+        {
+          role: "user",
+
+          parts: [
+            {
+              text: message,
+            },
+          ],
+        },
+      ];
+    }
+
+    /* =====================================================
        CALL GEMINI
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const response =
       await withTimeout(
@@ -688,17 +689,7 @@ ${toolContext}
           model:
             "gemini-3.8-flash",
 
-          contents: [
-            {
-              role: "user",
-
-              parts: [
-                {
-                  text: message,
-                },
-              ],
-            },
-          ],
+          contents,
 
           config: {
             systemInstruction,
@@ -709,9 +700,9 @@ ${toolContext}
         })
       );
 
-    /* -----------------------------------------------------
+    /* =====================================================
        CHECK FUNCTION CALL
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const functionCalls =
       response.functionCalls || [];
@@ -720,6 +711,7 @@ ${toolContext}
       Array.isArray(functionCalls) &&
       functionCalls.length > 0
     ) {
+
       const call =
         functionCalls[0];
 
@@ -749,9 +741,9 @@ ${toolContext}
           args.input;
       }
 
-      /*
-       * The time tool normally needs no input.
-       */
+      /* ---------------------------------------------------
+         TIME TOOL
+      --------------------------------------------------- */
 
       if (
         functionName ===
@@ -762,9 +754,9 @@ ${toolContext}
           "current";
       }
 
-      /*
-       * Fallback for unexpected arguments.
-       */
+      /* ---------------------------------------------------
+         FALLBACK INPUT
+      --------------------------------------------------- */
 
       if (!input) {
         input =
@@ -772,6 +764,10 @@ ${toolContext}
             args
           );
       }
+
+      /* ---------------------------------------------------
+         ALLOWED TOOLS
+      --------------------------------------------------- */
 
       const allowedTools = [
         "calculator",
@@ -796,8 +792,35 @@ ${toolContext}
 
           toolCall:
             null,
+
+          toolCallId:
+            null,
+
+          modelContent:
+            null,
         };
       }
+
+      /* ---------------------------------------------------
+         GET ORIGINAL MODEL CONTENT
+         
+         This is what Gemini needs on the next turn.
+      --------------------------------------------------- */
+
+      const modelContent =
+        response
+          .candidates?.[0]
+          ?.content || null;
+
+      /* ---------------------------------------------------
+         GET FUNCTION CALL ID
+      --------------------------------------------------- */
+
+      const toolCallId =
+        cleanText(
+          (call as any)?.id,
+          200
+        );
 
       return {
         reply:
@@ -818,12 +841,17 @@ ${toolContext}
 
           input,
         },
+
+        toolCallId:
+          toolCallId || null,
+
+        modelContent,
       };
     }
 
-    /* -----------------------------------------------------
-       NORMAL RESPONSE
-    ----------------------------------------------------- */
+    /* =====================================================
+       NORMAL FINAL RESPONSE
+    ===================================================== */
 
     const raw =
       response.text?.trim() ||
@@ -842,20 +870,29 @@ ${toolContext}
 
         toolCall:
           null,
+
+        toolCallId:
+          null,
+
+        modelContent:
+          null,
       };
     }
 
     let parsed:
       any;
 
-    /* -----------------------------------------------------
+    /* =====================================================
        PARSE JSON
-    ----------------------------------------------------- */
+    ===================================================== */
 
     try {
+
       parsed =
         JSON.parse(raw);
+
     } catch {
+
       const cleaned =
         raw
           .replace(
@@ -873,14 +910,16 @@ ${toolContext}
           .trim();
 
       try {
+
         parsed =
           JSON.parse(
             cleaned
           );
+
       } catch {
+
         /*
-         * Gemini occasionally returns plain text.
-         * Do not crash the entire agent.
+         * Gemini sometimes returns plain text.
          */
 
         return {
@@ -898,13 +937,19 @@ ${toolContext}
 
           toolCall:
             null,
+
+          toolCallId:
+            null,
+
+          modelContent:
+            null,
         };
       }
     }
 
-    /* -----------------------------------------------------
+    /* =====================================================
        REPLY
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const reply =
       cleanText(
@@ -913,9 +958,9 @@ ${toolContext}
       ) ||
       "I am here to help.";
 
-    /* -----------------------------------------------------
+    /* =====================================================
        DETECTED ACTION
-    ----------------------------------------------------- */
+    ===================================================== */
 
     let detectedAction =
       null;
@@ -925,6 +970,7 @@ ${toolContext}
       typeof parsed.detectedAction ===
         "object"
     ) {
+
       const action =
         parsed.detectedAction;
 
@@ -947,6 +993,7 @@ ${toolContext}
         ) &&
         title
       ) {
+
         detectedAction = {
           type:
             action.type,
@@ -991,9 +1038,9 @@ ${toolContext}
       }
     }
 
-    /* -----------------------------------------------------
+    /* =====================================================
        NEW MEMORY
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const newMemory =
       cleanText(
@@ -1002,9 +1049,9 @@ ${toolContext}
       ) ||
       null;
 
-    /* -----------------------------------------------------
+    /* =====================================================
        FINAL AGENT ANSWER
-    ----------------------------------------------------- */
+    ===================================================== */
 
     return {
       reply,
@@ -1015,14 +1062,23 @@ ${toolContext}
 
       toolCall:
         null,
+
+      toolCallId:
+        null,
+
+      modelContent:
+        null,
     };
+
   } catch (error: any) {
+
     console.error(
       "[Nodysom AI] Gemini error:",
       error
     );
 
     if (toolResult) {
+
       return {
         reply:
           `Tool result: ${toolResult}`,
@@ -1034,6 +1090,12 @@ ${toolContext}
           null,
 
         toolCall:
+          null,
+
+        toolCallId:
+          null,
+
+        modelContent:
           null,
       };
     }
@@ -1050,6 +1112,12 @@ ${toolContext}
 
       toolCall:
         null,
+
+      toolCallId:
+        null,
+
+      modelContent:
+        null,
     };
   }
 }
@@ -1064,7 +1132,9 @@ app.get(
     _req,
     res
   ) => {
+
     res.json({
+
       status:
         "ok",
 
@@ -1088,6 +1158,7 @@ app.get(
         ),
 
       agent: {
+
         enabled:
           true,
 
@@ -1095,7 +1166,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Gemini Function Calling + Agent Controller",
+          "Gemini Native Function Calling + Agent Controller",
 
         tools: [
           "calculator",
@@ -1117,10 +1188,12 @@ app.post(
     req,
     res
   ) => {
+
     const startedAt =
       Date.now();
 
     try {
+
       const body =
         req.body || {};
 
@@ -1131,14 +1204,17 @@ app.post(
         );
 
       if (!message) {
+
         return res.status(400).json({
           error:
             "Agent message is required.",
         });
+
       }
 
       const agentRequest:
         AgentRequest = {
+
         message,
 
         history:
@@ -1149,6 +1225,7 @@ app.post(
         userProfile:
           body.userProfile
             ? {
+
                 name:
                   cleanText(
                     body
@@ -1172,6 +1249,7 @@ app.post(
                       ?.goals,
                     500
                   ),
+
               }
             : undefined,
 
@@ -1187,39 +1265,45 @@ app.post(
           ),
       };
 
-      /*
-       * =====================================================
-       * TRUE AGENT LOOP
-       *
-       * Understand
-       *      ↓
-       * Plan
-       *      ↓
-       * Gemini chooses tool
-       *      ↓
-       * Execute tool
-       *      ↓
-       * Verify result
-       *      ↓
-       * Gemini receives result
-       *      ↓
-       * Final answer
-       * =====================================================
-       */
+      /* ===================================================
+         TRUE AGENT LOOP
+
+         Understand
+              ↓
+         Plan
+              ↓
+         Choose Tool
+              ↓
+         Execute
+              ↓
+         Verify
+              ↓
+         Native Gemini Function Response
+              ↓
+         Re-plan
+              ↓
+         Final Answer
+      =================================================== */
 
       const result =
         await runAgent(
+
           agentRequest,
 
           async (
             request,
-            toolResult
+            toolResult,
+            context
           ) => {
+
             return generateAgentAnswer(
               request,
-              toolResult
+              toolResult,
+              context
             );
+
           }
+
         );
 
       const latency =
@@ -1231,11 +1315,15 @@ app.post(
       );
 
       return res.json({
+
         ...result,
 
         latency,
+
       });
+
     } catch (error: any) {
+
       const latency =
         Date.now() -
         startedAt;
@@ -1246,6 +1334,7 @@ app.post(
       );
 
       return res.status(500).json({
+
         error:
           error?.message ||
           "Agent request failed.",
@@ -1263,7 +1352,9 @@ app.post(
           null,
 
         latency,
+
       });
+
     }
   }
 );
@@ -1278,7 +1369,9 @@ app.post(
     req,
     res
   ) => {
+
     try {
+
       const body =
         req.body || {};
 
@@ -1289,14 +1382,17 @@ app.post(
         );
 
       if (!message) {
+
         return res.status(400).json({
           error:
             "Message is required.",
         });
+
       }
 
       const agentRequest:
         AgentRequest = {
+
         message,
 
         history:
@@ -1307,6 +1403,7 @@ app.post(
         userProfile:
           body.userProfile
             ? {
+
                 name:
                   cleanText(
                     body
@@ -1330,6 +1427,7 @@ app.post(
                       ?.goals,
                     500
                   ),
+
               }
             : undefined,
 
@@ -1347,20 +1445,27 @@ app.post(
 
       const result =
         await runAgent(
+
           agentRequest,
 
           async (
             request,
-            toolResult
+            toolResult,
+            context
           ) => {
+
             return generateAgentAnswer(
               request,
-              toolResult
+              toolResult,
+              context
             );
+
           }
+
         );
 
       return res.json({
+
         reply:
           result.reply,
 
@@ -1390,14 +1495,18 @@ app.post(
         toolsUsed:
           result.toolsUsed ||
           [],
+
       });
+
     } catch (error: any) {
+
       console.error(
         "[Nodysom Assistant] Error:",
         error
       );
 
       return res.status(500).json({
+
         error:
           error?.message ||
           "Failed to process request.",
@@ -1410,7 +1519,9 @@ app.post(
 
         newMemory:
           null,
+
       });
+
     }
   }
 );
@@ -1425,7 +1536,9 @@ app.post(
     req,
     res
   ) => {
+
     try {
+
       const query =
         cleanText(
           req.body?.query,
@@ -1433,10 +1546,12 @@ app.post(
         );
 
       if (!query) {
+
         return res.status(400).json({
           error:
             "Query is required.",
         });
+
       }
 
       const language =
@@ -1450,7 +1565,9 @@ app.post(
         getAI();
 
       if (!ai) {
+
         return res.json({
+
           summary:
             `Search request received: "${query}"`,
 
@@ -1469,12 +1586,15 @@ app.post(
 
           suggestedActions:
             [],
+
         });
+
       }
 
       const response =
         await withTimeout(
           ai.models.generateContent({
+
             model:
               "gemini-3.8-flash",
 
@@ -1496,10 +1616,12 @@ Do not invent sources.`,
               responseMimeType:
                 "text/plain",
             },
+
           })
         );
 
       return res.json({
+
         summary:
           response.text?.trim() ||
           "No result available.",
@@ -1518,18 +1640,24 @@ Do not invent sources.`,
 
         suggestedActions:
           [],
+
       });
+
     } catch (error: any) {
+
       console.error(
         "[Nodysom Search] Error:",
         error
       );
 
       return res.status(500).json({
+
         error:
           error?.message ||
           "Search failed.",
+
       });
+
     }
   }
 );
@@ -1544,7 +1672,9 @@ app.post(
     req,
     res
   ) => {
+
     try {
+
       const text =
         cleanText(
           req.body?.text,
@@ -1566,20 +1696,24 @@ app.post(
         );
 
       if (!text) {
+
         return res.status(400).json({
           error:
             "Text is required.",
         });
+
       }
 
       const ai =
         getAI();
 
       if (!ai) {
+
         return res.status(503).json({
           error:
             "Translation AI is not connected.",
         });
+
       }
 
       const prompt = `
@@ -1609,6 +1743,7 @@ ${text}
       const response =
         await withTimeout(
           ai.models.generateContent({
+
             model:
               "gemini-3.8-flash",
 
@@ -1619,6 +1754,7 @@ ${text}
               responseMimeType:
                 "application/json",
             },
+
           })
         );
 
@@ -1633,9 +1769,12 @@ ${text}
       };
 
       try {
+
         parsed =
           JSON.parse(raw);
+
       } catch {
+
         const cleaned =
           raw
             .replace(
@@ -1665,13 +1804,16 @@ ${text}
         );
 
       if (!translatedText) {
+
         return res.status(502).json({
           error:
             "Translation model returned no translated text.",
         });
+
       }
 
       return res.json({
+
         translatedText,
 
         phoneticGuide:
@@ -1689,18 +1831,24 @@ ${text}
         sourceLanguage,
 
         targetLanguage,
+
       });
+
     } catch (error: any) {
+
       console.error(
         "[Nodysom Translation] Error:",
         error
       );
 
       return res.status(500).json({
+
         error:
           error?.message ||
           "Translation failed.",
+
       });
+
     }
   }
 );
@@ -1715,7 +1863,9 @@ app.post(
     req,
     res
   ) => {
+
     try {
+
       const prompt =
         cleanText(
           req.body?.prompt,
@@ -1732,18 +1882,23 @@ app.post(
         );
 
       if (!prompt) {
+
         return res.status(400).json({
           error:
             "Schedule prompt is required.",
         });
+
       }
 
       const ai =
         getAI();
 
       if (!ai) {
+
         return res.json({
+
           schedule: [
+
             {
               time:
                 "08:00",
@@ -1811,13 +1966,16 @@ app.post(
               notes:
                 "",
             },
+
           ],
 
           date,
 
           offline:
             true,
+
         });
+
       }
 
       const schedulePrompt = `
@@ -1861,6 +2019,7 @@ Rules:
       const response =
         await withTimeout(
           ai.models.generateContent({
+
             model:
               "gemini-3.8-flash",
 
@@ -1871,6 +2030,7 @@ Rules:
               responseMimeType:
                 "application/json",
             },
+
           })
         );
 
@@ -1882,9 +2042,12 @@ Rules:
         any;
 
       try {
+
         parsed =
           JSON.parse(raw);
+
       } catch {
+
         const cleaned =
           raw
             .replace(
@@ -1919,6 +2082,7 @@ Rules:
           .slice(0, 12)
           .map(
             (item: any) => ({
+
               time:
                 cleanText(
                   item?.time,
@@ -1959,6 +2123,7 @@ Rules:
                   item?.notes,
                   300
                 ),
+
             })
           )
           .filter(
@@ -1975,37 +2140,48 @@ Rules:
         schedule.length ===
         0
       ) {
+
         return res.status(502).json({
+
           error:
             "The AI returned an invalid schedule.",
 
           schedule:
             [],
+
         });
+
       }
 
       return res.json({
+
         schedule,
 
         date,
 
         offline:
           false,
+
       });
+
     } catch (error: any) {
+
       console.error(
         "[Nodysom Smart Schedule] Error:",
         error
       );
 
       return res.status(500).json({
+
         error:
           error?.message ||
           "Smart schedule generation failed.",
 
         schedule:
           [],
+
       });
+
     }
   }
 );
@@ -2015,13 +2191,16 @@ Rules:
 ========================================================= */
 
 async function startServer() {
+
   const isProduction =
     process.env.NODE_ENV ===
     "production";
 
   if (!isProduction) {
+
     const vite =
       await createViteServer({
+
         server: {
           middlewareMode:
             true,
@@ -2029,12 +2208,15 @@ async function startServer() {
 
         appType:
           "spa",
+
       });
 
     app.use(
       vite.middlewares
     );
+
   } else {
+
     const distPath =
       path.resolve(
         process.cwd(),
@@ -2053,12 +2235,14 @@ async function startServer() {
         _req,
         res
       ) => {
+
         res.sendFile(
           path.join(
             distPath,
             "index.html"
           )
         );
+
       }
     );
   }
@@ -2067,20 +2251,24 @@ async function startServer() {
     PORT,
     "0.0.0.0",
     () => {
+
       console.log(
         `Nodysom AI running on port ${PORT}`
       );
+
     }
   );
 }
 
 startServer().catch(
   (error) => {
+
     console.error(
       "Failed to start Nodysom AI:",
       error
     );
 
     process.exit(1);
+
   }
 );
