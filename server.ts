@@ -144,13 +144,15 @@ function getAI():
       process.env.GEMINI_API_KEY || ""
     ).trim();
 
-  if (
+  const isPlaceholder =
     !apiKey ||
-    apiKey === "MY_GEMINI_API_KEY" ||
-    apiKey === "YOUR_GEMINI_API_KEY_HERE"
-  ) {
+    /^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+      apiKey
+    );
+
+  if (isPlaceholder) {
     console.error(
-      "[Nodysom AI] GEMINI_API_KEY is missing."
+      "[Nodysom AI] GEMINI_API_KEY is missing or still a placeholder."
     );
 
     return null;
@@ -333,16 +335,16 @@ Name: ${cleanText(
         )}
 
 Preferred language: ${cleanText(
-          profile.preferredLanguage ||
-            "en",
-          30
-        )}
+  profile.preferredLanguage ||
+    "en",
+  30
+)}
 
 Goals: ${cleanText(
-          profile.goals ||
-            "general productivity",
-          500
-        )}
+  profile.goals ||
+    "general productivity",
+  500
+)}
 `
       : "No profile information.";
 
@@ -1095,7 +1097,7 @@ ${historyText}
 }
 
 /* =========================================================
-   HEALTH CHECK
+   HEALTH CHECK + SAFE GEMINI DIAGNOSTICS
 ========================================================= */
 
 app.get(
@@ -1105,23 +1107,23 @@ app.get(
     res
   ) => {
 
-    const hasGeminiKey =
-      Boolean(
-        String(
-          process.env.GEMINI_API_KEY ||
-            ""
-        ).trim() &&
-        String(
-          process.env.GEMINI_API_KEY ||
-            ""
-        ).trim() !==
-          "MY_GEMINI_API_KEY" &&
-        String(
-          process.env.GEMINI_API_KEY ||
-            ""
-        ).trim() !==
-          "YOUR_GEMINI_API_KEY_HERE"
+    const rawKey =
+      String(
+        process.env.GEMINI_API_KEY || ""
       );
+
+    const trimmedKey =
+      rawKey.trim();
+
+    const placeholderDetected =
+      !trimmedKey ||
+      /^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+        trimmedKey
+      );
+
+    const hasGeminiKey =
+      trimmedKey.length > 0 &&
+      !placeholderDetected;
 
     res.json({
 
@@ -1141,6 +1143,24 @@ app.get(
         "gemini-3.8-flash",
 
       hasGeminiKey,
+
+      geminiDiagnostics: {
+
+        environmentVariableExists:
+          rawKey.length > 0,
+
+        trimmedValueExists:
+          trimmedKey.length > 0,
+
+        keyLength:
+          trimmedKey.length,
+
+        placeholderDetected,
+
+        usableKeyDetected:
+          hasGeminiKey,
+
+      },
 
       agent: {
 
@@ -2231,15 +2251,19 @@ async function startServer() {
         `Nodysom AI running on port ${PORT}`
       );
 
+      const runtimeKey =
+        String(
+          process.env.GEMINI_API_KEY || ""
+        ).trim();
+
+      const runtimeKeyUsable =
+        runtimeKey.length > 0 &&
+        !/^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+          runtimeKey
+        );
+
       console.log(
-        `[Nodysom AI] Gemini key available: ${
-          Boolean(
-            String(
-              process.env.GEMINI_API_KEY ||
-                ""
-            ).trim()
-          )
-        }`
+        `[Nodysom AI] Gemini key available: ${runtimeKeyUsable}`
       );
 
     }
