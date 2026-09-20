@@ -1,42 +1,14 @@
 import {
   detectTool,
   runTool,
-  AgentToolName,
-} from './tools';
+  type AgentToolName,
+  type DetectedTool,
+} from "./tools";
 
 export interface AgentRequest {
   message: string;
-
-  history?: Array<{
-    role: string;
-    content: string;
-  }>;
-
-  userProfile?: {
-    name?: string;
-    preferredLanguage?: string;
-    goals?: string;
-  };
-
-  memories?: Array<{
-    content: string;
-  }>;
-}
-
-export interface AgentAction {
-  type:
-    | 'TASK'
-    | 'REMINDER'
-    | 'SCHEDULE'
-    | 'BUDGET';
-
-  title: string;
-
-  date?: string;
-  time?: string;
-  category?: string;
-  amount?: number;
-  confirmedRequired?: boolean;
+  history?: unknown[];
+  memories?: string[];
 }
 
 export interface AgentToolCall {
@@ -44,15 +16,6 @@ export interface AgentToolCall {
   input: string;
 }
 
-/**
- * State passed between the Agent Controller
- * and the Gemini function-calling layer.
- *
- * Gemini 3 function calling requires the previous
- * model content and the matching function-call ID
- * to be preserved when sending the function result
- * back to Gemini.
- */
 export interface AgentAIContext {
   toolCallId?: string;
   toolName?: AgentToolName;
@@ -61,612 +24,444 @@ export interface AgentAIContext {
 
 export interface AgentAIAnswer {
   reply: string;
-
-  detectedAction?:
-    | AgentAction
-    | null;
-
-  newMemory?:
-    | string
-    | null;
-
-  toolCall?:
-    | AgentToolCall
-    | null;
+  detectedAction?: AgentAction | null;
+  newMemory?: string | null;
+  toolCall?: AgentToolCall | null;
 
   /**
-   * Gemini function-call ID.
+   * Native Gemini function-calling state.
+   * This is preserved between agent steps so the
+   * function result can be returned to the same
+   * model turn correctly.
    */
-  toolCallId?:
-    | string
-    | null;
+  toolCallId?: string | null;
+  modelContent?: unknown;
+}
 
-  /**
-   * Original Gemini model content containing
-   * the function call.
-   */
-  modelContent?:
-    | unknown
-    | null;
+export interface AgentAction {
+  type: string;
+  payload?: Record<string, unknown>;
 }
 
 export interface AgentResponse {
   reply: string;
+  detectedAction?: AgentAction | null;
+  newMemory?: string | null;
 
   usedTool: boolean;
+  tool?: AgentToolName | null;
+  toolResult?: string | null;
 
-  tool?: string;
-
-  toolResult?: string;
-
-  detectedAction?:
-    | AgentAction
-    | null;
-
-  newMemory?:
-    | string
-    | null;
-
-  steps?: number;
-
-  toolsUsed?: string[];
+  steps: number;
+  toolsUsed: AgentToolName[];
 }
-
-/* =========================================================
-   LIMITS
-========================================================= */
 
 const MAX_AGENT_STEPS = 6;
-
 const MAX_MESSAGE_LENGTH = 4000;
-
 const MAX_TOOL_RESULT_LENGTH = 2000;
 
-/* =========================================================
-   TOOL RESULT SANITIZATION
-========================================================= */
+const ALLOWED_TOOLS = new Set<AgentToolName>([
+  "calculator",
+  "time",
+  "text_stats",
+]);
 
-function sanitizeToolResult(
-  result: string
-): string {
-  const value =
-    String(result || '').trim();
+function cleanText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
 
-  if (!value) {
-    return 'Tool returned an empty result.';
+  return value
+    .replace(/\u0000/g, "")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function sanitizeToolResult(value: unknown): string {
+  if (typeof value === "string") {
+    return cleanText(value, MAX_TOOL_RESULT_LENGTH);
   }
 
-  if (
-    value.length >
-    MAX_TOOL_RESULT_LENGTH
-  ) {
-    return (
-      value.slice(
-        0,
-        MAX_TOOL_RESULT_LENGTH
-      ) +
-      '\n[Tool result truncated]'
+  try {
+    return cleanText(
+      JSON.stringify(value),
+      MAX_TOOL_RESULT_LENGTH
     );
+  } catch {
+    return "Tool returned an unreadable result.";
+  }
+}
+
+function sanitizeToolInput(value: unknown): string {
+  return cleanText(value, MAX_MESSAGE_LENGTH);
+}
+
+function isAllowedTool(
+  tool: unknown
+): tool is AgentToolName {
+  return (
+    typeof tool === "string" &&
+    ALLOWED_TOOLS.has(tool as AgentToolName)
+  );
+}
+
+function normalizeToolCall(
+  toolCall: AgentToolCall | null | undefined
+): AgentToolCall | null {
+  if (!toolCall) return null;
+
+  if (!isAllowedTool(toolCall.tool)) {
+    return null;
   }
 
-  return value;
+  return {
+    tool: toolCall.tool,
+    input: sanitizeToolInput(toolCall.input),
+  };
 }
 
-/* =========================================================
-   TOOL RESULT VERIFICATION
-========================================================= */
+function normalizeDetectedTool(
+  detected: DetectedTool | null
+): AgentToolCall | null {
+  if (!detected) return null;
 
-function verifyToolResult(
-  result: string
-): boolean {
-  const value =
-    String(result || '').trim();
+  if (!isAllowedTool(detected.tool)) {
+    return null;
+  }
 
-  return (
-    value.length > 0 &&
-    !value
-      .toLowerCase()
-      .includes(
-        'tool execution failed'
-      )
-  );
+  return {
+    tool: detected.tool,
+    input: sanitizeToolInput(detected.input),
+  };
 }
-
-/* =========================================================
-   TOOL FINGERPRINT
-========================================================= */
-
-function createToolFingerprint(
-  tool: AgentToolName,
-  input: string
-): string {
-  return (
-    `${tool}:${input.trim()}`
-  );
-}
-
-/* =========================================================
-   GENERAL NODYSOM AGENT
-========================================================= */
 
 export async function runAgent(
   request: AgentRequest,
-
   aiAnswer: (
     request: AgentRequest,
     toolResult?: string,
     context?: AgentAIContext
   ) => Promise<AgentAIAnswer>
 ): Promise<AgentResponse> {
-
-  /* =======================================================
-     INPUT VALIDATION
-  ======================================================= */
-
-  const message =
-    String(
-      request.message || ''
-    ).trim();
+  const message = cleanText(request.message, MAX_MESSAGE_LENGTH);
 
   if (!message) {
-    throw new Error(
-      'Agent message is required.'
-    );
+    return {
+      reply: "Please provide a message.",
+      detectedAction: null,
+      newMemory: null,
+      usedTool: false,
+      tool: null,
+      toolResult: null,
+      steps: 0,
+      toolsUsed: [],
+    };
   }
 
-  if (
-    message.length >
-    MAX_MESSAGE_LENGTH
-  ) {
-    throw new Error(
-      'Message is too long.'
-    );
-  }
+  const safeRequest: AgentRequest = {
+    ...request,
+    message,
+  };
 
-  if (
-    typeof aiAnswer !==
-    'function'
-  ) {
-    throw new Error(
-      'AI answer handler is required.'
-    );
-  }
+  let steps = 0;
 
-  /* =======================================================
-     AGENT STATE
-  ======================================================= */
+  let latestToolResult: string | undefined;
 
-  let latestToolResult:
-    | string
-    | undefined;
+  let lastTool: AgentToolName | null = null;
 
-  let lastTool:
-    | AgentToolName
-    | undefined;
+  let detectedAction: AgentAction | null = null;
 
-  let detectedAction:
-    | AgentAction
-    | null = null;
-
-  let newMemory:
-    | string
-    | null = null;
+  let newMemory: string | null = null;
 
   let usedTool = false;
 
-  const toolsUsed: string[] = [];
+  const toolsUsed: AgentToolName[] = [];
 
   /**
-   * Prevent the exact same tool call from
-   * executing forever.
-   */
-  const executedTools =
-    new Set<string>();
-
-  /**
-   * Native Gemini function-calling state.
+   * Native Gemini state.
    *
-   * This is critical for multi-turn function
-   * calling.
+   * These values come from the previous Gemini
+   * function-call response and are passed back
+   * together with the function result.
    */
-  let geminiContext:
-    | AgentAIContext
-    | undefined;
-
-  /* =======================================================
-     AGENT LOOP
-  ======================================================= */
-
-  for (
-    let step = 1;
-    step <= MAX_AGENT_STEPS;
-    step += 1
-  ) {
-
-    let modelResult:
-      AgentAIAnswer;
-
-    /* =====================================================
-       FIRST STEP
-    ===================================================== */
-
-    if (
-      step === 1 &&
-      !latestToolResult
-    ) {
-
-      /**
-       * Keep deterministic local tools working.
-       *
-       * Calculator, time and text_stats can be
-       * executed locally immediately.
-       */
-      const localPlan =
-        detectTool(
-          message
-        );
-
-      if (
-        localPlan.intent ===
-          'tool' &&
-        localPlan.tool
-      ) {
-
-        modelResult = {
-          reply: '',
-
-          toolCall: {
-            tool:
-              localPlan.tool,
-
-            input:
-              localPlan.input ||
-              '',
-          },
-
-          detectedAction:
-            null,
-
-          newMemory:
-            null,
-
-          toolCallId:
-            null,
-
-          modelContent:
-            null,
-        };
-
-      } else {
-
-        /**
-         * Normal Gemini request.
-         */
-        modelResult =
-          await aiAnswer(
-            request
-          );
-      }
-
-    } else {
-
-      /* ===================================================
-         SUBSEQUENT GEMINI TURN
-      =================================================== */
-
-      modelResult =
-        await aiAnswer(
-          request,
-          latestToolResult,
-          geminiContext
-        );
-    }
-
-    /* =====================================================
-       SAVE AI METADATA
-    ===================================================== */
-
-    detectedAction =
-      modelResult.detectedAction ||
-      detectedAction ||
-      null;
-
-    newMemory =
-      modelResult.newMemory ||
-      newMemory ||
-      null;
-
-    /* =====================================================
-       SAVE NATIVE GEMINI CONTEXT
-    ===================================================== */
-
-    if (
-      modelResult.toolCall &&
-      modelResult.toolCallId &&
-      modelResult.modelContent
-    ) {
-
-      geminiContext = {
-        toolCallId:
-          modelResult.toolCallId,
-
-        toolName:
-          modelResult.toolCall.tool,
-
-        modelContent:
-          modelResult.modelContent,
-      };
-    }
-
-    /* =====================================================
-       FINAL ANSWER
-    ===================================================== */
-
-    if (
-      !modelResult.toolCall
-    ) {
-
-      return {
-        reply:
-          modelResult.reply ||
-          'I could not generate a response.',
-
-        usedTool,
-
-        tool:
-          lastTool,
-
-        toolResult:
-          latestToolResult,
-
-        detectedAction,
-
-        newMemory,
-
-        steps: step,
-
-        toolsUsed,
-      };
-    }
-
-    /* =====================================================
-       TOOL REQUEST
-    ===================================================== */
-
-    const toolName =
-      modelResult.toolCall.tool;
-
-    const toolInput =
-      String(
-        modelResult.toolCall
-          .input || ''
-      ).trim();
-
-    /* =====================================================
-       VALID TOOLS
-    ===================================================== */
-
-    const validTools:
-      AgentToolName[] = [
-        'calculator',
-        'time',
-        'text_stats',
-      ];
-
-    if (
-      !validTools.includes(
-        toolName
-      )
-    ) {
-
-      return {
-        reply:
-          `The requested tool "${toolName}" is not available.`,
-
-        usedTool,
-
-        tool:
-          lastTool,
-
-        toolResult:
-          latestToolResult,
-
-        detectedAction,
-
-        newMemory,
-
-        steps: step,
-
-        toolsUsed,
-      };
-    }
-
-    /* =====================================================
-       LOOP PROTECTION
-    ===================================================== */
-
-    const toolFingerprint =
-      createToolFingerprint(
-        toolName,
-        toolInput
-      );
-
-    if (
-      executedTools.has(
-        toolFingerprint
-      )
-    ) {
-
-      /**
-       * Same exact tool call was already
-       * executed.
-       *
-       * Ask Gemini to finish with the
-       * existing result.
-       */
-      const fallback =
-        await aiAnswer(
-          request,
-          latestToolResult,
-          geminiContext
-        );
-
-      return {
-        reply:
-          fallback.reply ||
-          'I stopped because the same tool request was repeated.',
-
-        usedTool,
-
-        tool:
-          lastTool,
-
-        toolResult:
-          latestToolResult,
-
-        detectedAction:
-          fallback.detectedAction ||
-          detectedAction,
-
-        newMemory:
-          fallback.newMemory ||
-          newMemory,
-
-        steps: step,
-
-        toolsUsed,
-      };
-    }
-
-    executedTools.add(
-      toolFingerprint
-    );
-
-    /* =====================================================
-       EXECUTE TOOL
-    ===================================================== */
-
-    const tool =
-      runTool(
-        toolName,
-        toolInput
-      );
+  let geminiModelContent: unknown = null;
+  let geminiToolCallId: string | undefined;
+  let geminiToolName: AgentToolName | undefined;
+
+  /**
+   * ------------------------------------------------
+   * STEP 1
+   * ------------------------------------------------
+   *
+   * First check whether one of our deterministic
+   * local tools can answer the request directly.
+   *
+   * Example:
+   *   "calculate 25 * 4"
+   *   "what time is it?"
+   *   "count the words in..."
+   */
+  const detected = normalizeDetectedTool(
+    detectTool(message)
+  );
+
+  if (detected) {
+    steps++;
 
     usedTool = true;
+    lastTool = detected.tool;
 
-    lastTool =
-      tool.tool;
-
-    toolsUsed.push(
-      tool.tool
-    );
-
-    /* =====================================================
-       TOOL ERROR
-    ===================================================== */
-
-    if (!tool.ok) {
-
-      return {
-        reply:
-          `I could not complete the ${tool.tool} tool action: ${tool.result}`,
-
-        usedTool: true,
-
-        tool:
-          tool.tool,
-
-        toolResult:
-          tool.result,
-
-        detectedAction,
-
-        newMemory,
-
-        steps: step,
-
-        toolsUsed,
-      };
+    if (!toolsUsed.includes(detected.tool)) {
+      toolsUsed.push(detected.tool);
     }
 
-    /* =====================================================
-       SANITIZE RESULT
-    ===================================================== */
-
-    const safeResult =
-      sanitizeToolResult(
-        tool.result
+    try {
+      const rawResult = await runTool(
+        detected.tool,
+        detected.input
       );
 
-    /* =====================================================
-       VERIFY RESULT
-    ===================================================== */
+      latestToolResult = sanitizeToolResult(rawResult);
+    } catch (error) {
+      latestToolResult =
+        error instanceof Error
+          ? cleanText(error.message, MAX_TOOL_RESULT_LENGTH)
+          : "The tool failed to execute.";
+    }
 
-    if (
-      !verifyToolResult(
-        safeResult
-      )
-    ) {
+    /**
+     * Ask Gemini to turn the tool result into a
+     * natural user-facing answer.
+     *
+     * This is intentionally not treated as a native
+     * Gemini function-response because the tool was
+     * detected locally rather than generated by Gemini.
+     */
+    try {
+      const finalResult = await aiAnswer(
+        safeRequest,
+        latestToolResult
+      );
+
+      if (finalResult.detectedAction) {
+        detectedAction = finalResult.detectedAction;
+      }
+
+      if (finalResult.newMemory) {
+        newMemory = cleanText(
+          finalResult.newMemory,
+          1000
+        );
+      }
 
       return {
         reply:
-          `The ${tool.tool} tool did not return a usable result.`,
-
-        usedTool: true,
-
-        tool:
-          tool.tool,
-
-        toolResult:
-          safeResult,
-
+          cleanText(finalResult.reply, 4000) ||
+          latestToolResult ||
+          "Done.",
         detectedAction,
-
         newMemory,
+        usedTool,
+        tool: lastTool,
+        toolResult: latestToolResult,
+        steps,
+        toolsUsed,
+      };
+    } catch {
+      /**
+       * If Gemini is unavailable after a successful
+       * deterministic tool execution, return the
+       * tool result instead of losing the result.
+       */
+      return {
+        reply: latestToolResult || "The tool completed successfully.",
+        detectedAction,
+        newMemory,
+        usedTool,
+        tool: lastTool,
+        toolResult: latestToolResult,
+        steps,
+        toolsUsed,
+      };
+    }
+  }
 
-        steps: step,
+  /**
+   * ------------------------------------------------
+   * STEP 2+
+   * ------------------------------------------------
+   *
+   * No deterministic tool was detected.
+   * Let Gemini decide whether a tool is necessary.
+   */
+  for (
+    let currentStep = 0;
+    currentStep < MAX_AGENT_STEPS;
+    currentStep++
+  ) {
+    steps++;
 
+    let modelResult: AgentAIAnswer;
+
+    try {
+      /**
+       * If Gemini previously requested a tool,
+       * provide the native model content + matching
+       * function result context.
+       */
+      const context: AgentAIContext | undefined =
+        geminiModelContent &&
+        geminiToolCallId &&
+        geminiToolName
+          ? {
+              modelContent: geminiModelContent,
+              toolCallId: geminiToolCallId,
+              toolName: geminiToolName,
+            }
+          : undefined;
+
+      modelResult = await aiAnswer(
+        safeRequest,
+        latestToolResult,
+        context
+      );
+    } catch (error) {
+      return {
+        reply:
+          error instanceof Error
+            ? "I couldn't complete that request right now."
+            : "I couldn't complete that request right now.",
+        detectedAction,
+        newMemory,
+        usedTool,
+        tool: lastTool,
+        toolResult: latestToolResult ?? null,
+        steps,
         toolsUsed,
       };
     }
 
-    /* =====================================================
-       SAVE TOOL RESULT
-    ===================================================== */
+    /**
+     * Preserve structured response information.
+     */
+    if (modelResult.detectedAction) {
+      detectedAction = modelResult.detectedAction;
+    }
 
-    latestToolResult =
-      safeResult;
+    if (modelResult.newMemory) {
+      newMemory = cleanText(
+        modelResult.newMemory,
+        1000
+      );
+    }
 
-    /* =====================================================
-       CONTINUE
-    ===================================================== */
+    /**
+     * ------------------------------------------------
+     * NO TOOL CALL
+     * ------------------------------------------------
+     *
+     * Gemini has produced the final answer.
+     */
+    const normalizedToolCall = normalizeToolCall(
+      modelResult.toolCall
+    );
 
-    continue;
+    if (!normalizedToolCall) {
+      return {
+        reply:
+          cleanText(modelResult.reply, 4000) ||
+          latestToolResult ||
+          "Done.",
+        detectedAction,
+        newMemory,
+        usedTool,
+        tool: lastTool,
+        toolResult: latestToolResult ?? null,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    /**
+     * ------------------------------------------------
+     * TOOL CALL
+     * ------------------------------------------------
+     */
+    usedTool = true;
+    lastTool = normalizedToolCall.tool;
+
+    if (!toolsUsed.includes(normalizedToolCall.tool)) {
+      toolsUsed.push(normalizedToolCall.tool);
+    }
+
+    /**
+     * Save the Gemini model response and call ID.
+     *
+     * On the next iteration server.ts will construct
+     * the corresponding functionResponse and send it
+     * back to Gemini.
+     */
+    geminiModelContent =
+      modelResult.modelContent ?? null;
+
+    geminiToolCallId =
+      cleanText(modelResult.toolCallId, 200) ||
+      undefined;
+
+    geminiToolName =
+      normalizedToolCall.tool;
+
+    /**
+     * A function call without an ID cannot safely
+     * participate in the native function-response
+     * protocol.
+     *
+     * We still execute the local tool, but don't
+     * pretend we have a native Gemini call context.
+     */
+    if (!geminiToolCallId) {
+      geminiModelContent = null;
+      geminiToolName = undefined;
+    }
+
+    try {
+      const rawResult = await runTool(
+        normalizedToolCall.tool,
+        normalizedToolCall.input
+      );
+
+      latestToolResult = sanitizeToolResult(rawResult);
+    } catch (error) {
+      latestToolResult =
+        error instanceof Error
+          ? cleanText(
+              error.message,
+              MAX_TOOL_RESULT_LENGTH
+            )
+          : "Tool execution failed.";
+    }
+
+    /**
+     * Continue the loop.
+     *
+     * Gemini will receive the tool result on the
+     * next iteration.
+     */
   }
 
-  /* =======================================================
-     MAX STEP SAFETY
-  ======================================================= */
-
+  /**
+   * ------------------------------------------------
+   * MAX STEPS REACHED
+   * ------------------------------------------------
+   */
   return {
     reply:
-      'I reached the maximum number of agent steps before completing the request. Please try simplifying the task.',
-
-    usedTool,
-
-    tool:
-      lastTool,
-
-    toolResult:
-      latestToolResult,
-
+      latestToolResult ||
+      "I reached the maximum number of agent steps before completing the request.",
     detectedAction,
-
     newMemory,
-
-    steps:
-      MAX_AGENT_STEPS,
-
+    usedTool,
+    tool: lastTool,
+    toolResult: latestToolResult ?? null,
+    steps,
     toolsUsed,
   };
 }
