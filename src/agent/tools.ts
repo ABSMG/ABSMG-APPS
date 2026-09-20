@@ -11,6 +11,29 @@ export interface AgentToolResult {
 
 /**
  * =========================================================
+ * DETECTED TOOL TYPES
+ * =========================================================
+ *
+ * Used by agentController.ts to determine whether the
+ * user's message should be handled by a deterministic tool.
+ */
+
+export interface DetectedTool {
+  intent: "tool";
+  tool: AgentToolName;
+  input: string;
+}
+
+export interface DetectedAnswer {
+  intent: "answer";
+}
+
+export type ToolDetection =
+  | DetectedTool
+  | DetectedAnswer;
+
+/**
+ * =========================================================
  * CALCULATOR TOKEN TYPES
  * =========================================================
  */
@@ -489,6 +512,312 @@ function safeMathExpression(
 
 /**
  * =========================================================
+ * TOOL DETECTION HELPERS
+ * =========================================================
+ */
+
+/**
+ * Normalize user text for deterministic matching.
+ */
+function normalizeInput(
+  input: string
+): string {
+  return input
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * =========================================================
+ * CALCULATOR DETECTION
+ * =========================================================
+ */
+function detectCalculator(
+  input: string
+): DetectedTool | null {
+  const normalized =
+    normalizeInput(input);
+
+  /**
+   * Explicit calculator commands.
+   *
+   * Examples:
+   *
+   * calculate 25 * 40
+   * calc 10 + 5
+   * what is 20 / 4
+   */
+  const explicitMatch =
+    normalized.match(
+      /^(?:calculate|calc|what is)\s+(.+)$/i
+    );
+
+  if (explicitMatch) {
+    const expression =
+      explicitMatch[1].trim();
+
+    /**
+     * Only classify as calculator if
+     * the expression contains arithmetic
+     * characters/numbers.
+     */
+    if (
+      /[0-9]/.test(expression) &&
+      /[+\-*/%()]/.test(
+        expression
+      )
+    ) {
+      return {
+        intent: "tool",
+        tool: "calculator",
+        input: expression,
+      };
+    }
+  }
+
+  /**
+   * Direct arithmetic expression.
+   *
+   * Examples:
+   *
+   * 25 * 40
+   * 100 / 5
+   * (10 + 5) * 2
+   */
+  if (
+    /^[\d\s()+\-*/%.]+$/.test(
+      normalized
+    ) &&
+    /[+\-*/%]/.test(
+      normalized
+    ) &&
+    /\d/.test(
+      normalized
+    )
+  ) {
+    return {
+      intent: "tool",
+      tool: "calculator",
+      input: normalized,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * =========================================================
+ * TIME DETECTION
+ * =========================================================
+ */
+function detectTime(
+  input: string
+): DetectedTool | null {
+  const normalized =
+    normalizeInput(input);
+
+  const timePatterns = [
+    "what time is it",
+    "what is the time",
+    "current time",
+    "current date and time",
+    "tell me the time",
+    "show me the time",
+    "time now",
+    "what's the time",
+    "whats the time",
+  ];
+
+  const matches =
+    timePatterns.some(
+      (pattern) =>
+        normalized === pattern ||
+        normalized.includes(
+          pattern
+        )
+    );
+
+  if (!matches) {
+    return null;
+  }
+
+  return {
+    intent: "tool",
+    tool: "time",
+    input: "",
+  };
+}
+
+/**
+ * =========================================================
+ * TEXT STATS DETECTION
+ * =========================================================
+ */
+function detectTextStats(
+  input: string
+): DetectedTool | null {
+  const normalized =
+    normalizeInput(input);
+
+  /**
+   * "count words: hello world"
+   */
+  const wordMatch =
+    input.match(
+      /^(?:count|calculate)\s+(?:the\s+)?words(?:\s+in)?\s*[:\-]?\s*(.+)$/i
+    );
+
+  if (wordMatch) {
+    return {
+      intent: "tool",
+      tool: "text_stats",
+      input:
+        wordMatch[1].trim(),
+    };
+  }
+
+  /**
+   * "word count: hello world"
+   */
+  const wordCountMatch =
+    input.match(
+      /^(?:word\s+count|count\s+words)\s*[:\-]?\s*(.+)$/i
+    );
+
+  if (wordCountMatch) {
+    return {
+      intent: "tool",
+      tool: "text_stats",
+      input:
+        wordCountMatch[1].trim(),
+    };
+  }
+
+  /**
+   * "count characters: hello"
+   */
+  const characterMatch =
+    input.match(
+      /^(?:count|calculate)\s+(?:the\s+)?characters(?:\s+in)?\s*[:\-]?\s*(.+)$/i
+    );
+
+  if (characterMatch) {
+    return {
+      intent: "tool",
+      tool: "text_stats",
+      input:
+        characterMatch[1].trim(),
+    };
+  }
+
+  /**
+   * General text-statistics request.
+   */
+  const statsKeywords = [
+    "word count",
+    "count words",
+    "number of words",
+    "character count",
+    "count characters",
+    "text statistics",
+    "text stats",
+  ];
+
+  const isStatsRequest =
+    statsKeywords.some(
+      (keyword) =>
+        normalized.includes(
+          keyword
+        )
+    );
+
+  if (
+    isStatsRequest &&
+    input.length > 0
+  ) {
+    return {
+      intent: "tool",
+      tool: "text_stats",
+      input: input,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * =========================================================
+ * DETECT TOOL
+ * =========================================================
+ *
+ * This function is consumed by agentController.ts.
+ *
+ * Priority:
+ *
+ * 1. Calculator
+ * 2. Time
+ * 3. Text statistics
+ * 4. Normal AI answer
+ */
+export function detectTool(
+  input: string
+): ToolDetection {
+  const text =
+    typeof input === "string"
+      ? input.trim()
+      : "";
+
+  if (!text) {
+    return {
+      intent: "answer",
+    };
+  }
+
+  /**
+   * Calculator
+   */
+  const calculator =
+    detectCalculator(
+      text
+    );
+
+  if (calculator) {
+    return calculator;
+  }
+
+  /**
+   * Time
+   */
+  const time =
+    detectTime(text);
+
+  if (time) {
+    return time;
+  }
+
+  /**
+   * Text statistics
+   */
+  const textStats =
+    detectTextStats(
+      text
+    );
+
+  if (textStats) {
+    return textStats;
+  }
+
+  /**
+   * Normal AI request.
+   */
+  return {
+    intent: "answer",
+  };
+}
+
+/**
+ * =========================================================
  * RUN TOOL
  * =========================================================
  *
@@ -585,3 +914,4 @@ export function runTool(
           : "Tool execution failed.",
     };
   }
+}
