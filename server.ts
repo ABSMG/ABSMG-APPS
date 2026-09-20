@@ -11,10 +11,6 @@ import {
 } from "vite";
 
 import {
-  GoogleGenAI,
-} from "@google/genai";
-
-import {
   runAgent,
   AgentRequest,
   AgentAIContext,
@@ -32,10 +28,28 @@ const PORT =
   Number(process.env.PORT) || 3000;
 
 /* =========================================================
-   PERFORMANCE SETTINGS
+   AI CONFIGURATION
 ========================================================= */
 
 const AI_TIMEOUT_MS = 30000;
+
+const EXPLABS_BASE_URL =
+  String(
+    process.env.EXPLABS_BASE_URL ||
+      "https://api.experientiallabs.ai/v1"
+  )
+    .trim()
+    .replace(/\/+$/, "");
+
+const EXPLABS_MODEL =
+  String(
+    process.env.EXPLABS_MODEL ||
+      "gpt-5.6-luna"
+  ).trim();
+
+/* =========================================================
+   PERFORMANCE SETTINGS
+========================================================= */
 
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -125,64 +139,50 @@ app.use(
 );
 
 /* =========================================================
-   GEMINI CLIENT
+   EXPERIENTIAL LABS CONFIG
 ========================================================= */
 
-let aiClient:
-  | GoogleGenAI
-  | null = null;
+function getExplabsKey(): string {
+  return String(
+    process.env.EXPLABS_API_KEY || ""
+  ).trim();
+}
 
-function getAI():
-  | GoogleGenAI
-  | null {
-  if (aiClient) {
-    return aiClient;
-  }
-
-  const apiKey =
-    String(
-      process.env.GEMINI_API_KEY || ""
-    ).trim();
-
-  const isPlaceholder =
+function isPlaceholderKey(
+  apiKey: string
+): boolean {
+  return (
     !apiKey ||
     /^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
       apiKey
-    );
+    )
+  );
+}
 
-  if (isPlaceholder) {
-    console.error(
-      "[Nodysom AI] GEMINI_API_KEY is missing or still a placeholder."
-    );
+function hasExplabsKey(): boolean {
+  const key =
+    getExplabsKey();
 
-    return null;
-  }
+  return (
+    key.length > 0 &&
+    !isPlaceholderKey(key)
+  );
+}
 
-  try {
-    aiClient =
-      new GoogleGenAI({
-        apiKey,
-      });
+/* =========================================================
+   GENERIC JSON TYPES
+========================================================= */
 
-    console.log(
-      "[Nodysom AI] Gemini client initialized."
-    );
+type JsonRecord =
+  Record<string, unknown>;
 
-    return aiClient;
+interface ChatMessage {
+  role:
+    | "system"
+    | "user"
+    | "assistant";
 
-  } catch (error) {
-
-    console.error(
-      "[Nodysom AI] Failed to initialize Gemini client:",
-      error instanceof Error
-        ? error.message
-        : "Unknown error"
-    );
-
-    aiClient = null;
-
-    return null;
-  }
+  content: string;
 }
 
 /* =========================================================
@@ -196,6 +196,16 @@ function cleanText(
   return String(value ?? "")
     .trim()
     .slice(0, maxLength);
+}
+
+function safeJsonStringify(
+  value: unknown
+): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
 }
 
 /* =========================================================
@@ -308,7 +318,7 @@ function buildAgentContext(
     );
 
   const profile =
-    request.userProfile;
+    (request as any).userProfile;
 
   const historyText =
     history.length > 0
@@ -356,124 +366,219 @@ Goals: ${cleanText(
 }
 
 /* =========================================================
-   GEMINI FUNCTION DECLARATIONS
+   EXPERIENTIAL LABS CHAT COMPLETIONS
 ========================================================= */
 
-const GEMINI_AGENT_TOOLS = [
-  {
-    functionDeclarations: [
-      {
-        name: "calculator",
+interface ExplabsResponse {
+  id?: string;
 
-        description:
-          "Safely evaluates a mathematical expression. Use this for arithmetic calculations, percentages, parentheses, addition, subtraction, multiplication, division, and modulo.",
+  object?: string;
 
-        parameters: {
-          type: "object",
+  model?: string;
 
-          properties: {
-            input: {
-              type: "string",
+  choices?: Array<{
+    index?: number;
 
-              description:
-                "The mathematical expression to calculate. Example: 25 * 4 + 10",
-            },
-          },
+    message?: {
+      role?: string;
+      content?: string | null;
+    };
 
-          required: [
-            "input",
-          ],
-        },
-      },
+    finish_reason?: string | null;
+  }>;
 
-      {
-        name: "time",
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 
-        description:
-          "Returns the current date and time.",
+  provider?: string;
 
-        parameters: {
-          type: "object",
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string;
+  };
+}
 
-          properties: {},
-        },
-      },
+async function callExplabs(
+  messages: ChatMessage[],
+  options?: {
+    json?: boolean;
+    maxTokens?: number;
+  }
+): Promise<ExplabsResponse> {
+  const apiKey =
+    getExplabsKey();
 
-      {
-        name: "text_stats",
+  if (!apiKey) {
+    throw new Error(
+      "EXPLABS_API_KEY is not configured."
+    );
+  }
 
-        description:
-          "Calculates basic statistics for text, including word count and character count.",
+  if (isPlaceholderKey(apiKey)) {
+    throw new Error(
+      "EXPLABS_API_KEY is still a placeholder."
+    );
+  }
 
-        parameters: {
-          type: "object",
+  const body: JsonRecord = {
+    model:
+      EXPLABS_MODEL,
 
-          properties: {
-            input: {
-              type: "string",
+    messages,
 
-              description:
-                "The text that should be analyzed.",
-            },
-          },
+    max_tokens:
+      options?.maxTokens || 4096,
+  };
 
-          required: [
-            "input",
-          ],
-        },
-      },
-    ],
-  },
-];
-
-/* =========================================================
-   AGENT AI ANSWER
-   GEMINI + NATIVE FUNCTION CALLING
-========================================================= */
-
-async function generateAgentAnswer(
-  request: AgentRequest,
-  toolResult?: string,
-  context?: AgentAIContext
-) {
-  const ai = getAI();
-
-  /* -------------------------------------------------------
-     OFFLINE MODE
-  ------------------------------------------------------- */
-
-  if (!ai) {
-    return {
-      reply: toolResult
-        ? `Tool result: ${toolResult}`
-        : `I received your request: "${cleanText(
-            request.message,
-            MAX_MESSAGE_LENGTH
-          )}". Gemini is not connected yet.`,
-
-      detectedAction:
-        null,
-
-      newMemory:
-        null,
-
-      toolCall:
-        null,
-
-      toolCallId:
-        null,
-
-      modelContent:
-        null,
+  if (options?.json) {
+    body.response_format = {
+      type: "json_object",
     };
   }
 
-  const message =
-    cleanText(
-      request.message,
-      MAX_MESSAGE_LENGTH
+  const response =
+    await withTimeout(
+      fetch(
+        `${EXPLABS_BASE_URL}/chat/completions`,
+        {
+          method: "POST",
+
+          headers: {
+            Authorization:
+              `Bearer ${apiKey}`,
+
+            "Content-Type":
+              "application/json",
+          },
+
+          body:
+            JSON.stringify(body),
+        }
+      )
     );
 
+  const raw =
+    await response.text();
+
+  let data:
+    | ExplabsResponse
+    | null = null;
+
+  try {
+    data =
+      JSON.parse(raw);
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const apiMessage =
+      data?.error?.message ||
+      raw ||
+      `Experiential Labs request failed with HTTP ${response.status}.`;
+
+    throw new Error(
+      `Experiential Labs API error (${response.status}): ${cleanText(
+        apiMessage,
+        1000
+      )}`
+    );
+  }
+
+  if (!data) {
+    throw new Error(
+      "Experiential Labs returned invalid JSON."
+    );
+  }
+
+  return data;
+}
+
+/* =========================================================
+   EXTRACT MODEL TEXT
+========================================================= */
+
+function extractResponseText(
+  response: ExplabsResponse
+): string {
+  return cleanText(
+    response.choices?.[0]?.message?.content,
+    30000
+  );
+}
+
+/* =========================================================
+   PARSE MODEL JSON
+========================================================= */
+
+function parseModelJson(
+  raw: string
+): JsonRecord | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed =
+      JSON.parse(raw);
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as JsonRecord;
+    }
+  } catch {
+    // Continue below.
+  }
+
+  const cleaned =
+    raw
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
+
+  try {
+    const parsed =
+      JSON.parse(cleaned);
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as JsonRecord;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+/* =========================================================
+   AGENT SYSTEM PROMPT
+========================================================= */
+
+function buildAgentSystemInstruction(
+  request: AgentRequest,
+  toolResult?: string
+): string {
   const {
     historyText,
     memoryText,
@@ -483,81 +588,109 @@ async function generateAgentAnswer(
       request
     );
 
-  /* -------------------------------------------------------
-     SYSTEM INSTRUCTION
-  ------------------------------------------------------- */
-
-  const systemInstruction = `
+  return `
 You are Nodysom AI.
 
-You are a general-purpose universal AI agent.
+You are a general-purpose AI assistant and agent.
 
-You are NOT limited to:
+You can help with legitimate tasks including:
 
+- education
 - scholarships
 - jobs
-- education
 - productivity
-
-You can help with many legitimate general tasks.
-
-==================================================
-CORE AGENT BEHAVIOR
-==================================================
-
-Your job is to:
-
-1. Understand the user's request.
-2. Decide whether a tool is needed.
-3. Request the correct tool when needed.
-4. Use the returned tool result.
-5. Continue reasoning when another step is required.
-6. Give a useful final answer.
-7. Never invent tool results.
-8. Never claim an action happened when it did not.
-9. Respect the user's preferred language.
-10. State uncertainty when appropriate.
+- planning
+- writing
+- translation
+- mathematics
+- coding
+- research
+- explanations
+- general questions
 
 ==================================================
-AVAILABLE FUNCTION TOOLS
+IMPORTANT AGENT RULE
 ==================================================
+
+You have three local tools:
+
+1. calculator
+2. time
+3. text_stats
+
+You MUST NOT pretend to execute a tool.
+
+When a tool is needed, return a JSON tool request.
+
+Format:
+
+{
+  "reply": "",
+  "detectedAction": null,
+  "newMemory": null,
+  "toolCall": {
+    "tool": "calculator",
+    "input": "25 * 40"
+  }
+}
+
+Allowed tool names:
 
 calculator
-
-Use calculator for mathematical calculations.
-
-Examples:
-
-"What is 25 * 40?"
-
-"Calculate 15% of 800."
-
-"(20 + 5) * 4"
-
-Do not invent mathematical results.
-
---------------------------------------------------
-
 time
-
-Use time when the user asks for the current
-date or current time.
-
---------------------------------------------------
-
 text_stats
 
-Use text_stats when the user asks for:
+For calculator:
 
-- word count
-- character count
-- text statistics
+{
+  "tool": "calculator",
+  "input": "25 * 40"
+}
+
+For time:
+
+{
+  "tool": "time",
+  "input": "current"
+}
+
+For text_stats:
+
+{
+  "tool": "text_stats",
+  "input": "text to analyze"
+}
+
+==================================================
+TOOL RESULT
+==================================================
+
+If a tool result is provided below, use it.
+
+Never invent a tool result.
+
+Tool result:
+
+${toolResult || "No tool result available."}
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+If no tool is needed, return ONLY valid JSON:
+
+{
+  "reply": "natural answer",
+  "detectedAction": null,
+  "newMemory": null,
+  "toolCall": null
+}
 
 ==================================================
 SMART ACTIONS
 ==================================================
 
-If the user asks Nodysom to:
+If the user asks to:
 
 - create
 - add
@@ -566,13 +699,30 @@ If the user asks Nodysom to:
 - plan
 - organize
 
-something, create a detectedAction proposal.
+something, you may create a detectedAction proposal.
 
-The detectedAction is ONLY a proposal.
+A detectedAction is ONLY a proposal.
 
-The frontend must ask the user for confirmation.
+Never claim that an action has already been saved,
+scheduled, created, or completed.
 
-Never claim the action has already been added.
+Use:
+
+{
+  "type": "TASK",
+  "title": "Example task",
+  "date": "2026-09-20",
+  "time": "10:00",
+  "category": "General",
+  "amount": null
+}
+
+Allowed action types:
+
+TASK
+REMINDER
+SCHEDULE
+BUDGET
 
 ==================================================
 MEMORY
@@ -580,8 +730,8 @@ MEMORY
 
 Only create newMemory when the user explicitly
 shares a useful personal fact, preference, goal,
-habit, or other information that Nodysom should
-remember.
+habit, or other information that should reasonably
+be remembered.
 
 Do not create memories from ordinary questions.
 
@@ -593,21 +743,6 @@ Respect the user's preferred language.
 
 If the user writes in Swahili, respond in Swahili
 unless another language is requested.
-
-==================================================
-FINAL RESPONSE FORMAT
-==================================================
-
-When you are ready to answer without requesting
-another tool, return ONLY valid JSON.
-
-Required format:
-
-{
-  "reply": "natural response to the user",
-  "detectedAction": null,
-  "newMemory": null
-}
 
 ==================================================
 USER PROFILE
@@ -627,231 +762,107 @@ RECENT CONVERSATION
 
 ${historyText}
 `;
+}
+
+/* =========================================================
+   AGENT AI ANSWER
+   EXPERIENTIAL LABS JSON PROTOCOL
+========================================================= */
+
+async function generateAgentAnswer(
+  request: AgentRequest,
+  toolResult?: string,
+  _context?: AgentAIContext
+) {
+  const message =
+    cleanText(
+      request.message,
+      MAX_MESSAGE_LENGTH
+    );
+
+  /* -------------------------------------------------------
+     OFFLINE MODE
+  ------------------------------------------------------- */
+
+  if (!hasExplabsKey()) {
+    return {
+      reply: toolResult
+        ? `Tool result: ${toolResult}`
+        : `I received your request: "${message}". Experiential Labs is not connected yet.`,
+
+      detectedAction:
+        null,
+
+      newMemory:
+        null,
+
+      toolCall:
+        null,
+
+      toolCallId:
+        null,
+
+      modelContent:
+        null,
+    };
+  }
+
+  const systemInstruction =
+    buildAgentSystemInstruction(
+      request,
+      toolResult
+    );
+
+  const messages:
+    ChatMessage[] = [
+      {
+        role: "system",
+
+        content:
+          systemInstruction,
+      },
+
+      {
+        role: "user",
+
+        content:
+          message,
+      },
+    ];
+
+  if (toolResult) {
+    messages.push({
+      role: "user",
+
+      content:
+        `
+A local tool was executed.
+
+Use this tool result to answer the user's original request.
+
+TOOL RESULT:
+${toolResult}
+
+Return the final answer as valid JSON.
+If another local tool is required, return a toolCall instead.
+`,
+    });
+  }
 
   try {
-
-    /* =====================================================
-       FIRST / NORMAL GEMINI REQUEST
-    ===================================================== */
-
-    let contents: any[];
-
-    if (
-      toolResult &&
-      context?.modelContent &&
-      context?.toolCallId &&
-      context?.toolName
-    ) {
-
-      /* ===================================================
-         NATIVE FUNCTION RESPONSE
-      =================================================== */
-
-      contents = [
-        {
-          role: "user",
-
-          parts: [
-            {
-              text: message,
-            },
-          ],
-        },
-
-        context.modelContent,
-
-        {
-          role: "user",
-
-          parts: [
-            {
-              functionResponse: {
-                id:
-                  context.toolCallId,
-
-                name:
-                  context.toolName,
-
-                response: {
-                  result:
-                    toolResult,
-                },
-              },
-            },
-          ],
-        },
-      ];
-
-    } else {
-
-      contents = [
-        {
-          role: "user",
-
-          parts: [
-            {
-              text: message,
-            },
-          ],
-        },
-      ];
-    }
-
-    /* =====================================================
-       CALL GEMINI
-    ===================================================== */
-
     const response =
-      await withTimeout(
-        ai.models.generateContent({
-          model:
-            "gemini-3.8-flash",
-
-          contents,
-
-          config: {
-            systemInstruction,
-
-            tools:
-              GEMINI_AGENT_TOOLS,
-          },
-        })
+      await callExplabs(
+        messages,
+        {
+          json: true,
+          maxTokens: 4096,
+        }
       );
 
-    /* =====================================================
-       CHECK FUNCTION CALL
-    ===================================================== */
-
-    const functionCalls =
-      response.functionCalls || [];
-
-    if (
-      Array.isArray(functionCalls) &&
-      functionCalls.length > 0
-    ) {
-
-      const call =
-        functionCalls[0];
-
-      const functionName =
-        cleanText(
-          call?.name,
-          100
-        );
-
-      const args =
-        call?.args &&
-        typeof call.args ===
-          "object"
-          ? call.args as Record<
-              string,
-              unknown
-            >
-          : {};
-
-      let input = "";
-
-      if (
-        typeof args.input ===
-        "string"
-      ) {
-        input =
-          args.input;
-      }
-
-      if (
-        functionName ===
-          "time" &&
-        !input
-      ) {
-        input =
-          "current";
-      }
-
-      if (!input) {
-        input =
-          JSON.stringify(
-            args
-          );
-      }
-
-      const allowedTools = [
-        "calculator",
-        "time",
-        "text_stats",
-      ];
-
-      if (
-        !allowedTools.includes(
-          functionName
-        )
-      ) {
-        return {
-          reply:
-            `Gemini requested an unavailable tool: ${functionName}`,
-
-          detectedAction:
-            null,
-
-          newMemory:
-            null,
-
-          toolCall:
-            null,
-
-          toolCallId:
-            null,
-
-          modelContent:
-            null,
-        };
-      }
-
-      const modelContent =
-        response
-          .candidates?.[0]
-          ?.content || null;
-
-      const toolCallId =
-        cleanText(
-          (call as any)?.id,
-          200
-        );
-
-      return {
-        reply:
-          "",
-
-        detectedAction:
-          null,
-
-        newMemory:
-          null,
-
-        toolCall: {
-          tool:
-            functionName as
-              | "calculator"
-              | "time"
-              | "text_stats",
-
-          input,
-        },
-
-        toolCallId:
-          toolCallId || null,
-
-        modelContent,
-      };
-    }
-
-    /* =====================================================
-       NORMAL FINAL RESPONSE
-    ===================================================== */
-
     const raw =
-      response.text?.trim() ||
-      "";
+      extractResponseText(
+        response
+      );
 
     if (!raw) {
       return {
@@ -875,47 +886,74 @@ ${historyText}
       };
     }
 
-    let parsed:
-      any;
+    const parsed =
+      parseModelJson(raw);
 
-    try {
+    /* -----------------------------------------------------
+       FALLBACK IF MODEL RETURNS PLAIN TEXT
+    ----------------------------------------------------- */
 
-      parsed =
-        JSON.parse(raw);
+    if (!parsed) {
+      return {
+        reply:
+          raw,
 
-    } catch {
+        detectedAction:
+          null,
 
-      const cleaned =
-        raw
-          .replace(
-            /^```json\s*/i,
-            ""
-          )
-          .replace(
-            /^```\s*/i,
-            ""
-          )
-          .replace(
-            /\s*```$/i,
-            ""
-          )
-          .trim();
+        newMemory:
+          null,
 
-      try {
+        toolCall:
+          null,
 
-        parsed =
-          JSON.parse(
-            cleaned
-          );
+        toolCallId:
+          null,
 
-      } catch {
+        modelContent:
+          null,
+      };
+    }
 
+    /* -----------------------------------------------------
+       TOOL REQUEST
+    ----------------------------------------------------- */
+
+    const toolCall =
+      parsed.toolCall;
+
+    if (
+      toolCall &&
+      typeof toolCall ===
+        "object" &&
+      !Array.isArray(toolCall)
+    ) {
+      const requestedTool =
+        cleanText(
+          (toolCall as any).tool,
+          100
+        );
+
+      const input =
+        cleanText(
+          (toolCall as any).input,
+          MAX_MESSAGE_LENGTH
+        );
+
+      const allowedTools = [
+        "calculator",
+        "time",
+        "text_stats",
+      ];
+
+      if (
+        allowedTools.includes(
+          requestedTool
+        )
+      ) {
         return {
           reply:
-            cleanText(
-              raw,
-              10000
-            ),
+            "",
 
           detectedAction:
             null,
@@ -923,8 +961,17 @@ ${historyText}
           newMemory:
             null,
 
-          toolCall:
-            null,
+          toolCall: {
+            tool:
+              requestedTool as
+                | "calculator"
+                | "time"
+                | "text_stats",
+
+            input:
+              input ||
+              "current",
+          },
 
           toolCallId:
             null,
@@ -935,24 +982,34 @@ ${historyText}
       }
     }
 
+    /* -----------------------------------------------------
+       NORMAL RESPONSE
+    ----------------------------------------------------- */
+
     const reply =
       cleanText(
-        parsed?.reply,
+        parsed.reply,
         10000
       ) ||
       "I am here to help.";
 
-    let detectedAction =
-      null;
+    /* -----------------------------------------------------
+       DETECTED ACTION
+    ----------------------------------------------------- */
+
+    let detectedAction:
+      any = null;
 
     if (
-      parsed?.detectedAction &&
+      parsed.detectedAction &&
       typeof parsed.detectedAction ===
-        "object"
+        "object" &&
+      !Array.isArray(
+        parsed.detectedAction
+      )
     ) {
-
       const action =
-        parsed.detectedAction;
+        parsed.detectedAction as any;
 
       const allowedTypes = [
         "TASK",
@@ -973,7 +1030,6 @@ ${historyText}
         ) &&
         title
       ) {
-
         detectedAction = {
           type:
             action.type,
@@ -1020,7 +1076,7 @@ ${historyText}
 
     const newMemory =
       cleanText(
-        parsed?.newMemory,
+        parsed.newMemory,
         MAX_MEMORY_LENGTH
       ) ||
       null;
@@ -1043,16 +1099,14 @@ ${historyText}
     };
 
   } catch (error: any) {
-
     console.error(
-      "[Nodysom AI] Gemini request error:",
+      "[Nodysom AI] Experiential Labs request error:",
       error instanceof Error
         ? error.message
         : error
     );
 
     if (toolResult) {
-
       return {
         reply:
           `Tool result: ${toolResult}`,
@@ -1097,7 +1151,7 @@ ${historyText}
 }
 
 /* =========================================================
-   HEALTH CHECK + SAFE GEMINI DIAGNOSTICS
+   HEALTH CHECK
 ========================================================= */
 
 app.get(
@@ -1106,27 +1160,22 @@ app.get(
     _req,
     res
   ) => {
-
     const rawKey =
-      String(
-        process.env.GEMINI_API_KEY || ""
-      );
+      getExplabsKey();
 
     const trimmedKey =
       rawKey.trim();
 
     const placeholderDetected =
-      !trimmedKey ||
-      /^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+      isPlaceholderKey(
         trimmedKey
       );
 
-    const hasGeminiKey =
+    const hasApiKey =
       trimmedKey.length > 0 &&
       !placeholderDetected;
 
     res.json({
-
       status:
         "ok",
 
@@ -1137,15 +1186,18 @@ app.get(
         "Plan Your Day. Live Smarter.",
 
       aiProvider:
-        "Google Gemini",
+        "Experiential Labs",
+
+      baseUrl:
+        EXPLABS_BASE_URL,
 
       model:
-        "gemini-3.8-flash",
+        EXPLABS_MODEL,
 
-      hasGeminiKey,
+      hasExplabsKey:
+        hasApiKey,
 
-      geminiDiagnostics: {
-
+      explabsDiagnostics: {
         environmentVariableExists:
           rawKey.length > 0,
 
@@ -1158,12 +1210,10 @@ app.get(
         placeholderDetected,
 
         usableKeyDetected:
-          hasGeminiKey,
-
+          hasApiKey,
       },
 
       agent: {
-
         enabled:
           true,
 
@@ -1171,7 +1221,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Gemini Native Function Calling + Agent Controller",
+          "Experiential Labs JSON Agent Protocol + Local Tool Controller",
 
         tools: [
           "calculator",
@@ -1193,12 +1243,10 @@ app.post(
     req,
     res
   ) => {
-
     const startedAt =
       Date.now();
 
     try {
-
       const body =
         req.body || {};
 
@@ -1209,70 +1257,65 @@ app.post(
         );
 
       if (!message) {
-
         return res.status(400).json({
           error:
             "Agent message is required.",
         });
-
       }
 
       const agentRequest:
-        AgentRequest = {
+        AgentRequest =
+        {
+          message,
 
-        message,
+          history:
+            normalizeHistory(
+              body.history
+            ),
 
-        history:
-          normalizeHistory(
-            body.history
-          ),
+          userProfile:
+            body.userProfile
+              ? {
+                  name:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.name,
+                      100
+                    ),
 
-        userProfile:
-          body.userProfile
-            ? {
+                  preferredLanguage:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.preferredLanguage,
+                      30
+                    ),
 
-                name:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.name,
-                    100
-                  ),
+                  goals:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.goals,
+                      500
+                    ),
+                }
+              : undefined,
 
-                preferredLanguage:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.preferredLanguage,
-                    30
-                  ),
-
-                goals:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.goals,
-                    500
-                  ),
-
-              }
-            : undefined,
-
-        memories:
-          normalizeMemories(
-            body.memories
-          ).map(
-            (
-              content
-            ) => ({
-              content,
-            })
-          ),
-      };
+          memories:
+            normalizeMemories(
+              body.memories
+            ).map(
+              (
+                content
+              ) => ({
+                content,
+              })
+            ),
+        };
 
       const result =
         await runAgent(
-
           agentRequest,
 
           async (
@@ -1280,15 +1323,12 @@ app.post(
             toolResult,
             context
           ) => {
-
             return generateAgentAnswer(
               request,
               toolResult,
               context
             );
-
           }
-
         );
 
       const latency =
@@ -1300,15 +1340,11 @@ app.post(
       );
 
       return res.json({
-
         ...result,
-
         latency,
-
       });
 
     } catch (error: any) {
-
       const latency =
         Date.now() -
         startedAt;
@@ -1321,7 +1357,6 @@ app.post(
       );
 
       return res.status(500).json({
-
         error:
           error?.message ||
           "Agent request failed.",
@@ -1339,9 +1374,7 @@ app.post(
           null,
 
         latency,
-
       });
-
     }
   }
 );
@@ -1356,9 +1389,7 @@ app.post(
     req,
     res
   ) => {
-
     try {
-
       const body =
         req.body || {};
 
@@ -1369,70 +1400,65 @@ app.post(
         );
 
       if (!message) {
-
         return res.status(400).json({
           error:
             "Message is required.",
         });
-
       }
 
       const agentRequest:
-        AgentRequest = {
+        AgentRequest =
+        {
+          message,
 
-        message,
+          history:
+            normalizeHistory(
+              body.history
+            ),
 
-        history:
-          normalizeHistory(
-            body.history
-          ),
+          userProfile:
+            body.userProfile
+              ? {
+                  name:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.name,
+                      100
+                    ),
 
-        userProfile:
-          body.userProfile
-            ? {
+                  preferredLanguage:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.preferredLanguage,
+                      30
+                    ),
 
-                name:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.name,
-                    100
-                  ),
+                  goals:
+                    cleanText(
+                      body
+                        .userProfile
+                        ?.goals,
+                      500
+                    ),
+                }
+              : undefined,
 
-                preferredLanguage:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.preferredLanguage,
-                    30
-                  ),
-
-                goals:
-                  cleanText(
-                    body
-                      .userProfile
-                      ?.goals,
-                    500
-                  ),
-
-              }
-            : undefined,
-
-        memories:
-          normalizeMemories(
-            body.memories
-          ).map(
-            (
-              content
-            ) => ({
-              content,
-            })
-          ),
-      };
+          memories:
+            normalizeMemories(
+              body.memories
+            ).map(
+              (
+                content
+              ) => ({
+                content,
+              })
+            ),
+        };
 
       const result =
         await runAgent(
-
           agentRequest,
 
           async (
@@ -1440,19 +1466,15 @@ app.post(
             toolResult,
             context
           ) => {
-
             return generateAgentAnswer(
               request,
               toolResult,
               context
             );
-
           }
-
         );
 
       return res.json({
-
         reply:
           result.reply,
 
@@ -1482,11 +1504,9 @@ app.post(
         toolsUsed:
           result.toolsUsed ||
           [],
-
       });
 
     } catch (error: any) {
-
       console.error(
         "[Nodysom Assistant] Error:",
         error instanceof Error
@@ -1495,7 +1515,6 @@ app.post(
       );
 
       return res.status(500).json({
-
         error:
           error?.message ||
           "Failed to process request.",
@@ -1508,15 +1527,13 @@ app.post(
 
         newMemory:
           null,
-
       });
-
     }
   }
 );
 
 /* =========================================================
-   SIMPLE SEARCH COMPATIBILITY ENDPOINT
+   SIMPLE SEARCH
 ========================================================= */
 
 app.post(
@@ -1525,9 +1542,7 @@ app.post(
     req,
     res
   ) => {
-
     try {
-
       const query =
         cleanText(
           req.body?.query,
@@ -1535,12 +1550,10 @@ app.post(
         );
 
       if (!query) {
-
         return res.status(400).json({
           error:
             "Query is required.",
         });
-
       }
 
       const language =
@@ -1550,13 +1563,8 @@ app.post(
           30
         );
 
-      const ai =
-        getAI();
-
-      if (!ai) {
-
+      if (!hasExplabsKey()) {
         return res.json({
-
           summary:
             `Search request received: "${query}"`,
 
@@ -1575,44 +1583,61 @@ app.post(
 
           suggestedActions:
             [],
-
         });
-
       }
 
+      const messages:
+        ChatMessage[] = [
+          {
+            role:
+              "system",
+
+            content:
+              `
+You are Nodysom AI search assistant.
+
+Answer the user's search request clearly.
+
+Language:
+${language}
+
+Rules:
+
+- Do not invent sources.
+- Clearly distinguish known information
+  from uncertainty.
+- If you cannot verify something, say so.
+- Do not fabricate URLs.
+- Return a useful concise answer.
+`,
+          },
+
+          {
+            role:
+              "user",
+
+            content:
+              query,
+          },
+        ];
+
       const response =
-        await withTimeout(
-          ai.models.generateContent({
+        await callExplabs(
+          messages,
+          {
+            json: false,
+            maxTokens: 3000,
+          }
+        );
 
-            model:
-              "gemini-3.8-flash",
-
-            contents:
-              `User search request:
-
-${query}
-
-Respond in ${language}.
-
-Give a concise answer.
-
-Clearly distinguish known information
-from uncertainty.
-
-Do not invent sources.`,
-
-            config: {
-              responseMimeType:
-                "text/plain",
-            },
-
-          })
+      const summary =
+        extractResponseText(
+          response
         );
 
       return res.json({
-
         summary:
-          response.text?.trim() ||
+          summary ||
           "No result available.",
 
         verifiedFacts:
@@ -1629,11 +1654,9 @@ Do not invent sources.`,
 
         suggestedActions:
           [],
-
       });
 
     } catch (error: any) {
-
       console.error(
         "[Nodysom Search] Error:",
         error instanceof Error
@@ -1642,13 +1665,10 @@ Do not invent sources.`,
       );
 
       return res.status(500).json({
-
         error:
           error?.message ||
           "Search failed.",
-
       });
-
     }
   }
 );
@@ -1663,9 +1683,7 @@ app.post(
     req,
     res
   ) => {
-
     try {
-
       const text =
         cleanText(
           req.body?.text,
@@ -1687,105 +1705,91 @@ app.post(
         );
 
       if (!text) {
-
         return res.status(400).json({
           error:
             "Text is required.",
         });
-
       }
 
-      const ai =
-        getAI();
-
-      if (!ai) {
-
+      if (!hasExplabsKey()) {
         return res.status(503).json({
           error:
             "Translation AI is not connected.",
         });
-
       }
 
-      const prompt = `
-Translate the following text accurately.
+      const messages:
+        ChatMessage[] = [
+          {
+            role:
+              "system",
 
-Source language: ${sourceLanguage}
-Target language: ${targetLanguage}
+            content:
+              `
+You are a professional translation engine.
 
-Return ONLY valid JSON with exactly these fields:
+Translate the user's text accurately.
+
+Source language:
+${sourceLanguage}
+
+Target language:
+${targetLanguage}
+
+Return ONLY valid JSON:
 
 {
   "translatedText": "translation",
-  "phoneticGuide": "optional pronunciation guide, or empty string",
-  "notes": "brief useful translation note, or empty string"
+  "phoneticGuide": "",
+  "notes": ""
 }
 
-Do not wrap the JSON in markdown fences.
+Rules:
 
-Preserve the original meaning, names, numbers,
-formatting, and tone.
+- Preserve meaning.
+- Preserve names.
+- Preserve numbers.
+- Preserve tone.
+- Do not add information.
+- phoneticGuide may be empty.
+- notes may be empty.
+- Do not use markdown.
+`,
+          },
 
-Text:
+          {
+            role:
+              "user",
 
-${text}
-`;
+            content:
+              text,
+          },
+        ];
 
       const response =
-        await withTimeout(
-          ai.models.generateContent({
-
-            model:
-              "gemini-3.8-flash",
-
-            contents:
-              prompt,
-
-            config: {
-              responseMimeType:
-                "application/json",
-            },
-
-          })
+        await callExplabs(
+          messages,
+          {
+            json: true,
+            maxTokens: 2500,
+          }
         );
 
       const raw =
-        response.text?.trim() ||
-        "";
+        extractResponseText(
+          response
+        );
 
-      let parsed: {
-        translatedText?: unknown;
-        phoneticGuide?: unknown;
-        notes?: unknown;
-      };
-
-      try {
-
-        parsed =
-          JSON.parse(raw);
-
-      } catch {
-
-        const cleaned =
+      const parsed =
+        parseModelJson(
           raw
-            .replace(
-              /^```json\s*/i,
-              ""
-            )
-            .replace(
-              /^```\s*/i,
-              ""
-            )
-            .replace(
-              /\s*```$/i,
-              ""
-            )
-            .trim();
+        );
 
-        parsed =
-          JSON.parse(
-            cleaned
-          );
+      if (!parsed) {
+        return res.status(502).json({
+          error:
+            "Translation model returned invalid JSON.",
+        });
       }
 
       const translatedText =
@@ -1795,16 +1799,13 @@ ${text}
         );
 
       if (!translatedText) {
-
         return res.status(502).json({
           error:
             "Translation model returned no translated text.",
         });
-
       }
 
       return res.json({
-
         translatedText,
 
         phoneticGuide:
@@ -1822,11 +1823,9 @@ ${text}
         sourceLanguage,
 
         targetLanguage,
-
       });
 
     } catch (error: any) {
-
       console.error(
         "[Nodysom Translation] Error:",
         error instanceof Error
@@ -1835,13 +1834,10 @@ ${text}
       );
 
       return res.status(500).json({
-
         error:
           error?.message ||
           "Translation failed.",
-
       });
-
     }
   }
 );
@@ -1856,9 +1852,7 @@ app.post(
     req,
     res
   ) => {
-
     try {
-
       const prompt =
         cleanText(
           req.body?.prompt,
@@ -1875,23 +1869,15 @@ app.post(
         );
 
       if (!prompt) {
-
         return res.status(400).json({
           error:
             "Schedule prompt is required.",
         });
-
       }
 
-      const ai =
-        getAI();
-
-      if (!ai) {
-
+      if (!hasExplabsKey()) {
         return res.json({
-
           schedule: [
-
             {
               time:
                 "08:00",
@@ -1959,27 +1945,28 @@ app.post(
               notes:
                 "",
             },
-
           ],
 
           date,
 
           offline:
             true,
-
         });
-
       }
 
-      const schedulePrompt = `
-Create a practical daily schedule for the user.
+      const messages:
+        ChatMessage[] = [
+          {
+            role:
+              "system",
 
-Date: ${date}
+            content:
+              `
+You are Nodysom AI Smart Schedule.
 
-User request:
-${prompt}
+Create a practical daily schedule.
 
-Return ONLY valid JSON in exactly this shape:
+Return ONLY valid JSON:
 
 {
   "schedule": [
@@ -1995,77 +1982,66 @@ Return ONLY valid JSON in exactly this shape:
 
 Rules:
 
-- Create 3 to 12 useful schedule items.
-- Use 24-hour HH:MM time.
-- Keep titles short and actionable.
-- durationMinutes must be a positive integer when included.
-- Do not invent appointments or commitments.
-- Respect explicit times in the user's request.
-- If the user gives no times, choose sensible times.
+- Create 3 to 12 items.
+- Use 24-hour HH:MM.
 - Avoid overlapping items.
-- Include breaks when appropriate.
+- Respect explicit times.
+- Do not invent appointments.
+- Use sensible times when none are given.
+- Include breaks when useful.
+- durationMinutes must be a positive integer.
 - Keep notes short.
-- Return JSON only.
-- Do not use markdown.
-`;
+- JSON only.
+`,
+          },
+
+          {
+            role:
+              "user",
+
+            content:
+              `
+Date:
+${date}
+
+User request:
+${prompt}
+`,
+          },
+        ];
 
       const response =
-        await withTimeout(
-          ai.models.generateContent({
-
-            model:
-              "gemini-3.8-flash",
-
-            contents:
-              schedulePrompt,
-
-            config: {
-              responseMimeType:
-                "application/json",
-            },
-
-          })
+        await callExplabs(
+          messages,
+          {
+            json: true,
+            maxTokens: 3000,
+          }
         );
 
       const raw =
-        response.text?.trim() ||
-        "";
+        extractResponseText(
+          response
+        );
 
-      let parsed:
-        any;
-
-      try {
-
-        parsed =
-          JSON.parse(raw);
-
-      } catch {
-
-        const cleaned =
+      const parsed =
+        parseModelJson(
           raw
-            .replace(
-              /^```json\s*/i,
-              ""
-            )
-            .replace(
-              /^```\s*/i,
-              ""
-            )
-            .replace(
-              /\s*```$/i,
-              ""
-            )
-            .trim();
+        );
 
-        parsed =
-          JSON.parse(
-            cleaned
-          );
+      if (!parsed) {
+        return res.status(502).json({
+          error:
+            "The AI returned invalid schedule JSON.",
+
+          schedule:
+            [],
+        });
       }
 
       const sourceSchedule =
         Array.isArray(
-          parsed?.schedule
+          parsed.schedule
         )
           ? parsed.schedule
           : [];
@@ -2075,7 +2051,6 @@ Rules:
           .slice(0, 12)
           .map(
             (item: any) => ({
-
               time:
                 cleanText(
                   item?.time,
@@ -2116,7 +2091,6 @@ Rules:
                   item?.notes,
                   300
                 ),
-
             })
           )
           .filter(
@@ -2133,32 +2107,25 @@ Rules:
         schedule.length ===
         0
       ) {
-
         return res.status(502).json({
-
           error:
             "The AI returned an invalid schedule.",
 
           schedule:
             [],
-
         });
-
       }
 
       return res.json({
-
         schedule,
 
         date,
 
         offline:
           false,
-
       });
 
     } catch (error: any) {
-
       console.error(
         "[Nodysom Smart Schedule] Error:",
         error instanceof Error
@@ -2167,16 +2134,13 @@ Rules:
       );
 
       return res.status(500).json({
-
         error:
           error?.message ||
           "Smart schedule generation failed.",
 
         schedule:
           [],
-
       });
-
     }
   }
 );
@@ -2186,16 +2150,13 @@ Rules:
 ========================================================= */
 
 async function startServer() {
-
   const isProduction =
     process.env.NODE_ENV ===
     "production";
 
   if (!isProduction) {
-
     const vite =
       await createViteServer({
-
         server: {
           middlewareMode:
             true,
@@ -2203,7 +2164,6 @@ async function startServer() {
 
         appType:
           "spa",
-
       });
 
     app.use(
@@ -2211,7 +2171,6 @@ async function startServer() {
     );
 
   } else {
-
     const distPath =
       path.resolve(
         process.cwd(),
@@ -2230,14 +2189,12 @@ async function startServer() {
         _req,
         res
       ) => {
-
         res.sendFile(
           path.join(
             distPath,
             "index.html"
           )
         );
-
       }
     );
   }
@@ -2246,33 +2203,36 @@ async function startServer() {
     PORT,
     "0.0.0.0",
     () => {
-
       console.log(
         `Nodysom AI running on port ${PORT}`
       );
 
       const runtimeKey =
-        String(
-          process.env.GEMINI_API_KEY || ""
-        ).trim();
+        getExplabsKey();
 
       const runtimeKeyUsable =
         runtimeKey.length > 0 &&
-        !/^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+        !isPlaceholderKey(
           runtimeKey
         );
 
       console.log(
-        `[Nodysom AI] Gemini key available: ${runtimeKeyUsable}`
+        `[Nodysom AI] Experiential Labs key available: ${runtimeKeyUsable}`
       );
 
+      console.log(
+        `[Nodysom AI] Experiential Labs base URL: ${EXPLABS_BASE_URL}`
+      );
+
+      console.log(
+        `[Nodysom AI] Experiential Labs model: ${EXPLABS_MODEL}`
+      );
     }
   );
 }
 
 startServer().catch(
   (error) => {
-
     console.error(
       "Failed to start Nodysom AI:",
       error instanceof Error
@@ -2281,6 +2241,5 @@ startServer().catch(
     );
 
     process.exit(1);
-
   }
 );
