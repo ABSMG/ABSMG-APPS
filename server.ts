@@ -140,21 +140,47 @@ function getAI():
   }
 
   const apiKey =
-    process.env.GEMINI_API_KEY;
+    String(
+      process.env.GEMINI_API_KEY || ""
+    ).trim();
 
   if (
     !apiKey ||
-    apiKey === "MY_GEMINI_API_KEY"
+    apiKey === "MY_GEMINI_API_KEY" ||
+    apiKey === "YOUR_GEMINI_API_KEY_HERE"
   ) {
+    console.error(
+      "[Nodysom AI] GEMINI_API_KEY is missing."
+    );
+
     return null;
   }
 
-  aiClient =
-    new GoogleGenAI({
-      apiKey,
-    });
+  try {
+    aiClient =
+      new GoogleGenAI({
+        apiKey,
+      });
 
-  return aiClient;
+    console.log(
+      "[Nodysom AI] Gemini client initialized."
+    );
+
+    return aiClient;
+
+  } catch (error) {
+
+    console.error(
+      "[Nodysom AI] Failed to initialize Gemini client:",
+      error instanceof Error
+        ? error.message
+        : "Unknown error"
+    );
+
+    aiClient = null;
+
+    return null;
+  }
 }
 
 /* =========================================================
@@ -253,7 +279,9 @@ function normalizeMemories(
     .slice(0, MAX_MEMORY_ITEMS)
     .map((item: any) =>
       cleanText(
-        item?.content,
+        typeof item === "string"
+          ? item
+          : item?.content,
         MAX_MEMORY_LENGTH
       )
     )
@@ -615,14 +643,6 @@ ${historyText}
 
       /* ===================================================
          NATIVE FUNCTION RESPONSE
-         
-         Gemini receives:
-         
-         1. Original user message
-         2. Previous model function call
-         3. Function response
-         
-         This preserves the native function-calling chain.
       =================================================== */
 
       contents = [
@@ -661,10 +681,6 @@ ${historyText}
       ];
 
     } else {
-
-      /* ===================================================
-         NORMAL FIRST TURN
-      =================================================== */
 
       contents = [
         {
@@ -741,10 +757,6 @@ ${historyText}
           args.input;
       }
 
-      /* ---------------------------------------------------
-         TIME TOOL
-      --------------------------------------------------- */
-
       if (
         functionName ===
           "time" &&
@@ -754,20 +766,12 @@ ${historyText}
           "current";
       }
 
-      /* ---------------------------------------------------
-         FALLBACK INPUT
-      --------------------------------------------------- */
-
       if (!input) {
         input =
           JSON.stringify(
             args
           );
       }
-
-      /* ---------------------------------------------------
-         ALLOWED TOOLS
-      --------------------------------------------------- */
 
       const allowedTools = [
         "calculator",
@@ -801,20 +805,10 @@ ${historyText}
         };
       }
 
-      /* ---------------------------------------------------
-         GET ORIGINAL MODEL CONTENT
-         
-         This is what Gemini needs on the next turn.
-      --------------------------------------------------- */
-
       const modelContent =
         response
           .candidates?.[0]
           ?.content || null;
-
-      /* ---------------------------------------------------
-         GET FUNCTION CALL ID
-      --------------------------------------------------- */
 
       const toolCallId =
         cleanText(
@@ -882,10 +876,6 @@ ${historyText}
     let parsed:
       any;
 
-    /* =====================================================
-       PARSE JSON
-    ===================================================== */
-
     try {
 
       parsed =
@@ -918,10 +908,6 @@ ${historyText}
 
       } catch {
 
-        /*
-         * Gemini sometimes returns plain text.
-         */
-
         return {
           reply:
             cleanText(
@@ -947,20 +933,12 @@ ${historyText}
       }
     }
 
-    /* =====================================================
-       REPLY
-    ===================================================== */
-
     const reply =
       cleanText(
         parsed?.reply,
         10000
       ) ||
       "I am here to help.";
-
-    /* =====================================================
-       DETECTED ACTION
-    ===================================================== */
 
     let detectedAction =
       null;
@@ -1038,20 +1016,12 @@ ${historyText}
       }
     }
 
-    /* =====================================================
-       NEW MEMORY
-    ===================================================== */
-
     const newMemory =
       cleanText(
         parsed?.newMemory,
         MAX_MEMORY_LENGTH
       ) ||
       null;
-
-    /* =====================================================
-       FINAL AGENT ANSWER
-    ===================================================== */
 
     return {
       reply,
@@ -1073,8 +1043,10 @@ ${historyText}
   } catch (error: any) {
 
     console.error(
-      "[Nodysom AI] Gemini error:",
-      error
+      "[Nodysom AI] Gemini request error:",
+      error instanceof Error
+        ? error.message
+        : error
     );
 
     if (toolResult) {
@@ -1133,6 +1105,24 @@ app.get(
     res
   ) => {
 
+    const hasGeminiKey =
+      Boolean(
+        String(
+          process.env.GEMINI_API_KEY ||
+            ""
+        ).trim() &&
+        String(
+          process.env.GEMINI_API_KEY ||
+            ""
+        ).trim() !==
+          "MY_GEMINI_API_KEY" &&
+        String(
+          process.env.GEMINI_API_KEY ||
+            ""
+        ).trim() !==
+          "YOUR_GEMINI_API_KEY_HERE"
+      );
+
     res.json({
 
       status:
@@ -1150,12 +1140,7 @@ app.get(
       model:
         "gemini-3.8-flash",
 
-      hasGeminiKey:
-        Boolean(
-          process.env.GEMINI_API_KEY &&
-            process.env.GEMINI_API_KEY !==
-              "MY_GEMINI_API_KEY"
-        ),
+      hasGeminiKey,
 
       agent: {
 
@@ -1265,26 +1250,6 @@ app.post(
           ),
       };
 
-      /* ===================================================
-         TRUE AGENT LOOP
-
-         Understand
-              ↓
-         Plan
-              ↓
-         Choose Tool
-              ↓
-         Execute
-              ↓
-         Verify
-              ↓
-         Native Gemini Function Response
-              ↓
-         Re-plan
-              ↓
-         Final Answer
-      =================================================== */
-
       const result =
         await runAgent(
 
@@ -1330,7 +1295,9 @@ app.post(
 
       console.error(
         `[Nodysom Agent] Error after ${latency}ms:`,
-        error
+        error instanceof Error
+          ? error.message
+          : error
       );
 
       return res.status(500).json({
@@ -1502,7 +1469,9 @@ app.post(
 
       console.error(
         "[Nodysom Assistant] Error:",
-        error
+        error instanceof Error
+          ? error.message
+          : error
       );
 
       return res.status(500).json({
@@ -1647,7 +1616,9 @@ Do not invent sources.`,
 
       console.error(
         "[Nodysom Search] Error:",
-        error
+        error instanceof Error
+          ? error.message
+          : error
       );
 
       return res.status(500).json({
@@ -1838,7 +1809,9 @@ ${text}
 
       console.error(
         "[Nodysom Translation] Error:",
-        error
+        error instanceof Error
+          ? error.message
+          : error
       );
 
       return res.status(500).json({
@@ -2168,7 +2141,9 @@ Rules:
 
       console.error(
         "[Nodysom Smart Schedule] Error:",
-        error
+        error instanceof Error
+          ? error.message
+          : error
       );
 
       return res.status(500).json({
@@ -2256,6 +2231,17 @@ async function startServer() {
         `Nodysom AI running on port ${PORT}`
       );
 
+      console.log(
+        `[Nodysom AI] Gemini key available: ${
+          Boolean(
+            String(
+              process.env.GEMINI_API_KEY ||
+                ""
+            ).trim()
+          )
+        }`
+      );
+
     }
   );
 }
@@ -2265,7 +2251,9 @@ startServer().catch(
 
     console.error(
       "Failed to start Nodysom AI:",
-      error
+      error instanceof Error
+        ? error.message
+        : error
     );
 
     process.exit(1);
