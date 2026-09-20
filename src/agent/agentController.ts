@@ -9,13 +9,6 @@ import {
  * =========================================================
  * AGENT REQUEST
  * =========================================================
- *
- * This is the request shape expected by the new
- * Experiential Labs based server.ts.
- *
- * userProfile is intentionally typed as unknown so the
- * controller does not depend on a specific frontend
- * profile shape.
  */
 export interface AgentRequest {
   message: string;
@@ -28,16 +21,6 @@ export interface AgentRequest {
  * =========================================================
  * JSON TOOL CALL
  * =========================================================
- *
- * This matches the JSON protocol used by the new
- * server.ts:
- *
- * {
- *   "toolCall": {
- *     "tool": "calculator",
- *     "input": "25 * 40"
- *   }
- * }
  */
 export interface AgentToolCall {
   tool: AgentToolName;
@@ -48,10 +31,6 @@ export interface AgentToolCall {
  * =========================================================
  * AI ANSWER
  * =========================================================
- *
- * No Gemini-native modelContent/function-call state.
- *
- * Experiential Labs returns structured JSON instead.
  */
 export interface AgentAIAnswer {
   reply: string;
@@ -192,9 +171,6 @@ function isAllowedTool(
  * =========================================================
  * NORMALIZE AI JSON TOOL CALL
  * =========================================================
- *
- * Converts potentially unsafe/invalid model output into
- * a safe internal tool-call object.
  */
 function normalizeToolCall(
   toolCall:
@@ -249,13 +225,6 @@ function normalizeDetectedTool(
  * =========================================================
  * SAFE REQUEST
  * =========================================================
- *
- * Keeps the original request structure, including:
- *
- * - message
- * - history
- * - memories
- * - userProfile
  */
 function createSafeRequest(
   request: AgentRequest,
@@ -263,10 +232,13 @@ function createSafeRequest(
 ): AgentRequest {
   return {
     ...request,
+
     message,
+
     history: Array.isArray(request.history)
       ? request.history
       : [],
+
     memories: Array.isArray(request.memories)
       ? request.memories
           .filter(
@@ -282,6 +254,7 @@ function createSafeRequest(
           .filter(Boolean)
           .slice(0, 20)
       : [],
+
     userProfile:
       request.userProfile ?? null,
   };
@@ -291,17 +264,6 @@ function createSafeRequest(
  * =========================================================
  * AGENT CONTROLLER
  * =========================================================
- *
- * Flow:
- *
- * 1. Validate request.
- * 2. Check deterministic local tools.
- * 3. If local tool is detected, execute it.
- * 4. Ask Experiential Labs to formulate the response.
- * 5. Otherwise ask Experiential Labs for a JSON response.
- * 6. If AI returns toolCall, execute it locally.
- * 7. Send the tool result back through aiAnswer().
- * 8. Repeat until final response or MAX_AGENT_STEPS.
  */
 export async function runAgent(
   request: AgentRequest,
@@ -377,18 +339,34 @@ export async function runAgent(
    * STEP 1
    * LOCAL DETERMINISTIC TOOL DETECTION
    * =======================================================
+   */
+  const detectedRaw =
+    detectTool(message);
+
+  /**
+   * IMPORTANT:
+   * detectTool() can return either:
    *
-   * Example:
+   * { intent: "tool", ... }
    *
-   * "calculate 25 * 40"
-   * "what time is it"
-   * "count the words in this text"
+   * OR
+   *
+   * { intent: "answer" }
+   *
+   * We only normalize actual tools.
    */
   const detected =
-    normalizeDetectedTool(
-      detectTool(message)
-    );
+    detectedRaw.intent === "tool"
+      ? normalizeDetectedTool(
+          detectedRaw
+        )
+      : null;
 
+  /**
+   * =======================================================
+   * LOCAL TOOL EXECUTION
+   * =======================================================
+   */
   if (detected) {
     steps++;
 
@@ -413,14 +391,25 @@ export async function runAgent(
      */
     try {
       const rawResult =
-        await runTool(
+        runTool(
           detected.tool,
           detected.input
         );
 
+      /**
+       * runTool() returns:
+       *
+       * {
+       *   ok: boolean,
+       *   tool: AgentToolName,
+       *   result: string
+       * }
+       *
+       * We only send the actual result to the AI.
+       */
       latestToolResult =
         sanitizeToolResult(
-          rawResult
+          rawResult.result
         );
     } catch (error) {
       latestToolResult =
@@ -436,12 +425,6 @@ export async function runAgent(
      * -----------------------------------------------------
      * ASK AI TO EXPLAIN TOOL RESULT
      * -----------------------------------------------------
-     *
-     * IMPORTANT:
-     * There is no Gemini-native context here.
-     *
-     * Experiential Labs receives the tool result as
-     * normal structured context through server.ts.
      */
     try {
       const finalResult =
@@ -502,8 +485,8 @@ export async function runAgent(
       };
     } catch {
       /**
-       * If AI fails after the local tool succeeds,
-       * return the deterministic tool result.
+       * If AI fails after local tool succeeds,
+       * return deterministic result.
        */
       return {
         reply:
@@ -533,27 +516,6 @@ export async function runAgent(
    * STEP 2+
    * AI CONTROLLED TOOL LOOP
    * =======================================================
-   *
-   * Experiential Labs returns:
-   *
-   * {
-   *   "reply": "...",
-   *   "detectedAction": null,
-   *   "newMemory": null,
-   *   "toolCall": {
-   *     "tool": "calculator",
-   *     "input": "25 * 40"
-   *   }
-   * }
-   *
-   * OR:
-   *
-   * {
-   *   "reply": "The answer is 1000.",
-   *   "detectedAction": null,
-   *   "newMemory": null,
-   *   "toolCall": null
-   * }
    */
   for (
     let currentStep = 0;
@@ -570,16 +532,6 @@ export async function runAgent(
      * -----------------------------------------------------
      * CALL EXPERIENTIAL LABS
      * -----------------------------------------------------
-     *
-     * server.ts is responsible for:
-     *
-     * - API key
-     * - model
-     * - OpenAI-compatible endpoint
-     * - response_format JSON
-     * - parsing JSON
-     *
-     * This controller only handles the agent logic.
      */
     try {
       modelResult =
@@ -618,4 +570,182 @@ export async function runAgent(
       modelResult.detectedAction
     ) {
       detectedAction =
-        modelResult.detect
+        modelResult.detectedAction;
+    }
+
+    /**
+     * -----------------------------------------------------
+     * NEW MEMORY
+     * -----------------------------------------------------
+     */
+    if (
+      modelResult.newMemory
+    ) {
+      newMemory =
+        cleanText(
+          modelResult.newMemory,
+          MAX_MEMORY_LENGTH
+        );
+    }
+
+    /**
+     * -----------------------------------------------------
+     * NORMALIZE AI TOOL CALL
+     * -----------------------------------------------------
+     */
+    const toolCall =
+      normalizeToolCall(
+        modelResult.toolCall
+      );
+
+    /**
+     * -----------------------------------------------------
+     * FINAL AI ANSWER
+     * -----------------------------------------------------
+     *
+     * If AI did not request a tool,
+     * return its response immediately.
+     */
+    if (!toolCall) {
+      return {
+        reply:
+          cleanText(
+            modelResult.reply,
+            MAX_REPLY_LENGTH
+          ) ||
+          latestToolResult ||
+          "Done.",
+
+        detectedAction,
+
+        newMemory,
+
+        usedTool,
+
+        tool: lastTool,
+
+        toolResult:
+          latestToolResult ?? null,
+
+        steps,
+
+        toolsUsed,
+      };
+    }
+
+    /**
+     * -----------------------------------------------------
+     * MAX STEP PROTECTION
+     * -----------------------------------------------------
+     *
+     * Prevents an AI/tool loop from running forever.
+     */
+    if (
+      steps >=
+      MAX_AGENT_STEPS
+    ) {
+      return {
+        reply:
+          cleanText(
+            modelResult.reply,
+            MAX_REPLY_LENGTH
+          ) ||
+          latestToolResult ||
+          "I reached the maximum number of processing steps.",
+
+        detectedAction,
+
+        newMemory,
+
+        usedTool,
+
+        tool: lastTool,
+
+        toolResult:
+          latestToolResult ?? null,
+
+        steps,
+
+        toolsUsed,
+      };
+    }
+
+    /**
+     * -----------------------------------------------------
+     * EXECUTE AI REQUESTED TOOL
+     * -----------------------------------------------------
+     */
+    try {
+      const rawResult =
+        runTool(
+          toolCall.tool,
+          toolCall.input
+        );
+
+      latestToolResult =
+        sanitizeToolResult(
+          rawResult.result
+        );
+    } catch (error) {
+      latestToolResult =
+        error instanceof Error
+          ? cleanText(
+              error.message,
+              MAX_TOOL_RESULT_LENGTH
+            )
+          : "The requested tool failed to execute.";
+    }
+
+    /**
+     * -----------------------------------------------------
+     * UPDATE TOOL STATE
+     * -----------------------------------------------------
+     */
+    usedTool = true;
+
+    lastTool = toolCall.tool;
+
+    if (
+      !toolsUsed.includes(
+        toolCall.tool
+      )
+    ) {
+      toolsUsed.push(
+        toolCall.tool
+      );
+    }
+
+    /**
+     * The loop continues.
+     *
+     * On the next iteration, latestToolResult is passed
+     * back into aiAnswer().
+     */
+  }
+
+  /**
+   * =======================================================
+   * SAFETY FALLBACK
+   * =======================================================
+   */
+  return {
+    reply:
+      latestToolResult ||
+      "I couldn't complete that request.",
+
+    detectedAction,
+
+    newMemory,
+
+    usedTool,
+
+    tool: lastTool,
+
+    toolResult:
+      latestToolResult ?? null,
+
+    steps,
+
+    toolsUsed,
+  };
+}
