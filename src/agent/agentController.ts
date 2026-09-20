@@ -73,13 +73,9 @@ export interface AgentResponse {
  * =========================================================
  */
 const MAX_AGENT_STEPS = 6;
-
 const MAX_MESSAGE_LENGTH = 4000;
-
 const MAX_TOOL_RESULT_LENGTH = 2000;
-
 const MAX_MEMORY_LENGTH = 1000;
-
 const MAX_REPLY_LENGTH = 4000;
 
 /**
@@ -300,11 +296,10 @@ export async function runAgent(
    * CREATE SAFE REQUEST
    * -------------------------------------------------------
    */
-  const safeRequest =
-    createSafeRequest(
-      request,
-      message
-    );
+  const safeRequest = createSafeRequest(
+    request,
+    message
+  );
 
   /**
    * -------------------------------------------------------
@@ -331,8 +326,7 @@ export async function runAgent(
 
   let usedTool = false;
 
-  const toolsUsed:
-    AgentToolName[] = [];
+  const toolsUsed: AgentToolName[] = [];
 
   /**
    * =======================================================
@@ -340,21 +334,8 @@ export async function runAgent(
    * LOCAL DETERMINISTIC TOOL DETECTION
    * =======================================================
    */
-  const detectedRaw =
-    detectTool(message);
+  const detectedRaw = detectTool(message);
 
-  /**
-   * IMPORTANT:
-   * detectTool() can return either:
-   *
-   * { intent: "tool", ... }
-   *
-   * OR
-   *
-   * { intent: "answer" }
-   *
-   * We only normalize actual tools.
-   */
   const detected =
     detectedRaw.intent === "tool"
       ? normalizeDetectedTool(
@@ -390,23 +371,11 @@ export async function runAgent(
      * -----------------------------------------------------
      */
     try {
-      const rawResult =
-        runTool(
-          detected.tool,
-          detected.input
-        );
+      const rawResult = runTool(
+        detected.tool,
+        detected.input
+      );
 
-      /**
-       * runTool() returns:
-       *
-       * {
-       *   ok: boolean,
-       *   tool: AgentToolName,
-       *   result: string
-       * }
-       *
-       * We only send the actual result to the AI.
-       */
       latestToolResult =
         sanitizeToolResult(
           rawResult.result
@@ -433,9 +402,6 @@ export async function runAgent(
           latestToolResult
         );
 
-      /**
-       * Save detected action.
-       */
       if (
         finalResult.detectedAction
       ) {
@@ -443,9 +409,6 @@ export async function runAgent(
           finalResult.detectedAction;
       }
 
-      /**
-       * Save memory.
-       */
       if (
         finalResult.newMemory
       ) {
@@ -456,9 +419,6 @@ export async function runAgent(
           );
       }
 
-      /**
-       * Return final answer.
-       */
       return {
         reply:
           cleanText(
@@ -484,10 +444,6 @@ export async function runAgent(
         toolsUsed,
       };
     } catch {
-      /**
-       * If AI fails after local tool succeeds,
-       * return deterministic result.
-       */
       return {
         reply:
           latestToolResult ||
@@ -519,18 +475,16 @@ export async function runAgent(
    */
   for (
     let currentStep = 0;
-    currentStep <
-    MAX_AGENT_STEPS;
+    currentStep < MAX_AGENT_STEPS;
     currentStep++
   ) {
     steps++;
 
-    let modelResult:
-      AgentAIAnswer;
+    let modelResult: AgentAIAnswer;
 
     /**
      * -----------------------------------------------------
-     * CALL EXPERIENTIAL LABS
+     * CALL AI
      * -----------------------------------------------------
      */
     try {
@@ -590,7 +544,7 @@ export async function runAgent(
 
     /**
      * -----------------------------------------------------
-     * NORMALIZE AI TOOL CALL
+     * NORMALIZE TOOL CALL
      * -----------------------------------------------------
      */
     const toolCall =
@@ -602,9 +556,6 @@ export async function runAgent(
      * -----------------------------------------------------
      * FINAL AI ANSWER
      * -----------------------------------------------------
-     *
-     * If AI did not request a tool,
-     * return its response immediately.
      */
     if (!toolCall) {
       return {
@@ -637,12 +588,9 @@ export async function runAgent(
      * -----------------------------------------------------
      * MAX STEP PROTECTION
      * -----------------------------------------------------
-     *
-     * Prevents an AI/tool loop from running forever.
      */
     if (
-      steps >=
-      MAX_AGENT_STEPS
+      steps >= MAX_AGENT_STEPS
     ) {
       return {
         reply:
@@ -676,11 +624,10 @@ export async function runAgent(
      * -----------------------------------------------------
      */
     try {
-      const rawResult =
-        runTool(
-          toolCall.tool,
-          toolCall.input
-        );
+      const rawResult = runTool(
+        toolCall.tool,
+        toolCall.input
+      );
 
       latestToolResult =
         sanitizeToolResult(
@@ -714,13 +661,6 @@ export async function runAgent(
         toolCall.tool
       );
     }
-
-    /**
-     * The loop continues.
-     *
-     * On the next iteration, latestToolResult is passed
-     * back into aiAnswer().
-     */
   }
 
   /**
