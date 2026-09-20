@@ -12,8 +12,8 @@ import {
 
 import {
   runAgent,
-  AgentRequest,
-  AgentAIContext,
+  type AgentRequest,
+  type AgentAIAnswer,
 } from "./src/agent/agentController";
 
 dotenv.config();
@@ -282,7 +282,7 @@ function normalizeHistory(
 
 function normalizeMemories(
   memories: unknown
-) {
+): string[] {
   if (!Array.isArray(memories)) {
     return [];
   }
@@ -771,9 +771,8 @@ ${historyText}
 
 async function generateAgentAnswer(
   request: AgentRequest,
-  toolResult?: string,
-  _context?: AgentAIContext
-) {
+  toolResult?: string
+): Promise<AgentAIAnswer> {
   const message =
     cleanText(
       request.message,
@@ -797,12 +796,6 @@ async function generateAgentAnswer(
         null,
 
       toolCall:
-        null,
-
-      toolCallId:
-        null,
-
-      modelContent:
         null,
     };
   }
@@ -877,12 +870,6 @@ If another local tool is required, return a toolCall instead.
 
         toolCall:
           null,
-
-        toolCallId:
-          null,
-
-        modelContent:
-          null,
       };
     }
 
@@ -905,12 +892,6 @@ If another local tool is required, return a toolCall instead.
           null,
 
         toolCall:
-          null,
-
-        toolCallId:
-          null,
-
-        modelContent:
           null,
       };
     }
@@ -972,12 +953,6 @@ If another local tool is required, return a toolCall instead.
               input ||
               "current",
           },
-
-          toolCallId:
-            null,
-
-          modelContent:
-            null,
         };
       }
     }
@@ -1090,12 +1065,6 @@ If another local tool is required, return a toolCall instead.
 
       toolCall:
         null,
-
-      toolCallId:
-        null,
-
-      modelContent:
-        null,
     };
 
   } catch (error: any) {
@@ -1119,12 +1088,6 @@ If another local tool is required, return a toolCall instead.
 
         toolCall:
           null,
-
-        toolCallId:
-          null,
-
-        modelContent:
-          null,
       };
     }
 
@@ -1139,12 +1102,6 @@ If another local tool is required, return a toolCall instead.
         null,
 
       toolCall:
-        null,
-
-      toolCallId:
-        null,
-
-      modelContent:
         null,
     };
   }
@@ -1305,12 +1262,6 @@ app.post(
           memories:
             normalizeMemories(
               body.memories
-            ).map(
-              (
-                content
-              ) => ({
-                content,
-              })
             ),
         };
 
@@ -1320,13 +1271,11 @@ app.post(
 
           async (
             request,
-            toolResult,
-            context
+            toolResult
           ) => {
             return generateAgentAnswer(
               request,
-              toolResult,
-              context
+              toolResult
             );
           }
         );
@@ -1448,12 +1397,6 @@ app.post(
           memories:
             normalizeMemories(
               body.memories
-            ).map(
-              (
-                content
-              ) => ({
-                content,
-              })
             ),
         };
 
@@ -1463,13 +1406,11 @@ app.post(
 
           async (
             request,
-            toolResult,
-            context
+            toolResult
           ) => {
             return generateAgentAnswer(
               request,
-              toolResult,
-              context
+              toolResult
             );
           }
         );
