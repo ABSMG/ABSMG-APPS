@@ -399,8 +399,42 @@ interface ExplabsResponse {
     message?: string;
     type?: string;
     code?: string;
+    param?: string | null;
   };
 }
+
+/* =========================================================
+   EXPERIENTIAL LABS ERROR HELPERS
+========================================================= */
+
+function extractExplabsErrorCode(
+  data: ExplabsResponse | null
+): string | null {
+  const code =
+    data?.error?.code;
+
+  return code
+    ? cleanText(code, 120)
+    : null;
+}
+
+function extractExplabsRequestId(
+  response: Response
+): string | null {
+  return (
+    response.headers.get(
+      "x-request-id"
+    ) ||
+    response.headers.get(
+      "x-experiential-request-id"
+    ) ||
+    null
+  );
+}
+
+/* =========================================================
+   EXPERIENTIAL LABS REQUEST
+========================================================= */
 
 async function callExplabs(
   messages: ChatMessage[],
@@ -475,14 +509,34 @@ async function callExplabs(
     data = null;
   }
 
+  const requestId =
+    extractExplabsRequestId(
+      response
+    );
+
   if (!response.ok) {
     const apiMessage =
       data?.error?.message ||
       raw ||
       `Experiential Labs request failed with HTTP ${response.status}.`;
 
+    const errorCode =
+      extractExplabsErrorCode(
+        data
+      );
+
+    const codeSuffix =
+      errorCode
+        ? ` [code=${errorCode}]`
+        : "";
+
+    const requestSuffix =
+      requestId
+        ? ` [request_id=${requestId}]`
+        : "";
+
     throw new Error(
-      `Experiential Labs API error (${response.status}): ${cleanText(
+      `Experiential Labs API error (${response.status})${codeSuffix}${requestSuffix}: ${cleanText(
         apiMessage,
         1000
       )}`
@@ -1068,11 +1122,14 @@ If another local tool is required, return a toolCall instead.
     };
 
   } catch (error: any) {
-    console.error(
-      "[Nodysom AI] Experiential Labs request error:",
+    const errorMessage =
       error instanceof Error
         ? error.message
-        : error
+        : String(error);
+
+    console.error(
+      "[Nodysom AI] Experiential Labs request error:",
+      errorMessage
     );
 
     if (toolResult) {
