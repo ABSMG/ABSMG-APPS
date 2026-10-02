@@ -161,7 +161,35 @@ app.use(
     limit: "1mb",
   })
 );
+/* =========================================================
+   SEO FILES
+========================================================= */
 
+app.get("/robots.txt", (_req, res) => {
+  res
+    .type("text/plain")
+    .send(
+`User-agent: *
+Allow: /
+
+Sitemap: https://absmg-apps.onrender.com/sitemap.xml`
+    );
+});
+
+app.get("/sitemap.xml", (_req, res) => {
+  res
+    .type("application/xml")
+    .send(
+`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://absmg-apps.onrender.com/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>`
+    );
+});
 /* =========================================================
    RATE LIMITING
 ========================================================= */
