@@ -82,11 +82,9 @@ const ONBOARDING_KEY =
 /**
  * Generic merge for records that have an id.
  *
- * Cloud and local records are combined instead of allowing
- * one source to completely replace the other.
- *
- * Cloud values are applied first, then local values are
- * applied so the local cache is not accidentally lost.
+ * Cloud values are loaded first.
+ * Local values are then applied so local changes are
+ * preserved when the same record exists in both places.
  */
 function mergeById<T extends { id: string }>(
   cloudItems: T[],
@@ -113,8 +111,8 @@ function mergeById<T extends { id: string }>(
 /**
  * Convert chat timestamp into a sortable value.
  *
- * Chat timestamps can be either ISO strings or display
- * strings such as "18:03".
+ * Supports ISO timestamps and display timestamps such as
+ * "18:03" or "06:03 PM".
  */
 function chatOrderValue(
   message: ChatMessage,
@@ -152,11 +150,17 @@ function chatOrderValue(
     const meridiem =
       match[4]?.toUpperCase();
 
-    if (meridiem === 'PM' && hours < 12) {
+    if (
+      meridiem === 'PM' &&
+      hours < 12
+    ) {
       hours += 12;
     }
 
-    if (meridiem === 'AM' && hours === 12) {
+    if (
+      meridiem === 'AM' &&
+      hours === 12
+    ) {
       hours = 0;
     }
 
@@ -172,31 +176,32 @@ function chatOrderValue(
 
 
 /**
- * Merge chat history safely.
+ * Merge chat history for normal application hydration.
  *
- * Important:
- * - Existing local messages are preserved.
- * - Existing cloud messages are preserved.
- * - Duplicate IDs are removed.
- * - Newer local/cloud messages are retained.
- * - Result is limited to the same 200-message limit used
- *   by Storage.
+ * The application keeps the normal 200-message local limit.
  */
 function mergeChatHistory(
   cloudChat: ChatMessage[],
   localChat: ChatMessage[],
 ): ChatMessage[] {
-  const map = new Map<string, ChatMessage>();
+  const map =
+    new Map<string, ChatMessage>();
 
   for (const message of cloudChat) {
     if (message?.id) {
-      map.set(message.id, message);
+      map.set(
+        message.id,
+        message
+      );
     }
   }
 
   for (const message of localChat) {
     if (message?.id) {
-      map.set(message.id, message);
+      map.set(
+        message.id,
+        message
+      );
     }
   }
 
@@ -210,6 +215,48 @@ function mergeChatHistory(
         chatOrderValue(b, 0)
     )
     .slice(-200);
+}
+
+
+/**
+ * Merge chat history specifically for export.
+ *
+ * IMPORTANT:
+ * Export must NOT use the application's 200-message limit.
+ * This allows cloud history and local history to be exported
+ * together.
+ */
+function mergeChatHistoryForExport(
+  cloudChat: ChatMessage[],
+  localChat: ChatMessage[],
+): ChatMessage[] {
+  const map =
+    new Map<string, ChatMessage>();
+
+  for (const message of cloudChat) {
+    if (message?.id) {
+      map.set(
+        message.id,
+        message
+      );
+    }
+  }
+
+  for (const message of localChat) {
+    if (message?.id) {
+      map.set(
+        message.id,
+        message
+      );
+    }
+  }
+
+  return Array.from(map.values())
+    .sort(
+      (a, b) =>
+        chatOrderValue(a, 0) -
+        chatOrderValue(b, 0)
+    );
 }
 
 
@@ -331,8 +378,7 @@ export default function App() {
 
   /**
    * Keeps the latest local state available to the stable
-   * cloud-login callback without recreating the callback
-   * every time state changes.
+   * cloud-login callback.
    */
   const latestDataRef =
     useRef({
@@ -445,9 +491,6 @@ export default function App() {
               userId
             );
 
-          /**
-           * Ignore stale cloud responses.
-           */
           if (
             requestId !==
             cloudRequestId.current
@@ -460,14 +503,13 @@ export default function App() {
           }
 
 
-          // ===================================================
+          // =================================================
           // EXISTING CLOUD ACCOUNT
-          // ===================================================
+          // =================================================
 
           if (cloudData) {
             const localData =
               latestDataRef.current;
-
 
             const cloudUser =
               cloudData.user;
@@ -501,21 +543,12 @@ export default function App() {
                 : [];
 
 
-            /**
-             * IMPORTANT:
-             *
-             * We no longer treat cloud as the only source
-             * of truth.
-             *
-             * Local + cloud are merged.
-             */
-
-
             // -------------------------------------------------
             // USER
             // -------------------------------------------------
 
-            const restoredUser: UserProfile = {
+            const restoredUser:
+              UserProfile = {
               ...localData.user,
               ...(cloudUser || {}),
             };
@@ -619,13 +652,6 @@ export default function App() {
             // WRITE MERGED DATA BACK TO CLOUD
             // =================================================
 
-            /**
-             * This is important.
-             *
-             * If the local device had messages that were
-             * missing from the cloud, those messages are now
-             * uploaded instead of being deleted.
-             */
             await saveCloudData(
               userId,
               {
@@ -658,7 +684,6 @@ export default function App() {
               return;
             }
 
-
             cloudHydrated.current =
               true;
 
@@ -670,16 +695,10 @@ export default function App() {
           }
 
 
-          // ===================================================
+          // =================================================
           // NEW CLOUD ACCOUNT
-          // ===================================================
+          // =================================================
 
-          /**
-           * No cloud record exists.
-           *
-           * Current local data becomes the initial cloud
-           * backup.
-           */
           const localData =
             latestDataRef.current;
 
@@ -718,7 +737,6 @@ export default function App() {
             return;
           }
 
-
           cloudHydrated.current =
             true;
 
@@ -735,9 +753,6 @@ export default function App() {
             requestId ===
             cloudRequestId.current
           ) {
-            /**
-             * Keep local data intact when cloud fails.
-             */
             cloudHydrated.current =
               false;
 
@@ -905,9 +920,6 @@ export default function App() {
   // =========================================================
 
   useEffect(() => {
-    /**
-     * NEVER sync before cloud hydration.
-     */
     if (
       !cloudUserId ||
       !cloudReady ||
@@ -930,9 +942,6 @@ export default function App() {
     cloudSyncTimer.current =
       window.setTimeout(
         async () => {
-          /**
-           * Re-check immediately before writing.
-           */
           if (
             !cloudUserId ||
             !cloudReady ||
@@ -940,7 +949,6 @@ export default function App() {
           ) {
             return;
           }
-
 
           try {
             await saveCloudData(
@@ -1006,11 +1014,9 @@ export default function App() {
             password
           );
 
-
         if (error) {
           throw error;
         }
-
 
         if (!data.user) {
           throw new Error(
@@ -1018,16 +1024,11 @@ export default function App() {
           );
         }
 
-
-        /**
-         * Explicit hydration.
-         */
         await handleCloudLogin(
           data.user.id,
           data.user.email ||
             email
         );
-
 
         return {
           success: true,
@@ -1071,11 +1072,9 @@ export default function App() {
             password
           );
 
-
         if (error) {
           throw error;
         }
-
 
         if (
           data.session?.user
@@ -1086,14 +1085,12 @@ export default function App() {
               email
           );
 
-
           return {
             success: true,
             message:
               'Account created successfully. Your data is now backed up.',
           };
         }
-
 
         return {
           success: true,
@@ -1125,14 +1122,10 @@ export default function App() {
       setCloudBusy(true);
 
       try {
-        /**
-         * Invalidate all pending cloud operations.
-         */
         cloudRequestId.current++;
 
         cloudHydrated.current =
           false;
-
 
         if (
           cloudSyncTimer.current !==
@@ -1143,9 +1136,7 @@ export default function App() {
           );
         }
 
-
         await signOut();
-
 
         setCloudUserId(
           null
@@ -1160,12 +1151,7 @@ export default function App() {
         );
 
         /**
-         * IMPORTANT:
-         *
-         * Local chat/history is intentionally NOT cleared.
-         *
-         * This means logging out does not destroy the
-         * user's local data.
+         * Local data remains intact after logout.
          */
       } catch (error) {
         console.error(
@@ -1193,11 +1179,9 @@ export default function App() {
         ...updated,
       };
 
-
       setUser(
         nextUser
       );
-
 
       Storage.saveUser(
         nextUser
@@ -1225,11 +1209,9 @@ export default function App() {
               : item
         );
 
-
       setPlannerItems(
         updated
       );
-
 
       Storage.savePlannerItems(
         updated
@@ -1247,14 +1229,12 @@ export default function App() {
       const category =
         item.category?.trim();
 
-
       let tags =
         (item.tags || [])
           .map((tag) =>
             tag.trim()
           )
           .filter(Boolean);
-
 
       if (
         category &&
@@ -1268,11 +1248,9 @@ export default function App() {
         ];
       }
 
-
       tags = Array.from(
         new Set(tags)
       );
-
 
       const newItem:
         PlannerItem = {
@@ -1286,17 +1264,14 @@ export default function App() {
         tags,
       };
 
-
       const updated = [
         newItem,
         ...plannerItems,
       ];
 
-
       setPlannerItems(
         updated
       );
-
 
       Storage.savePlannerItems(
         updated
@@ -1321,10 +1296,8 @@ export default function App() {
               return habit;
             }
 
-
             const nextState =
               !habit.completedToday;
-
 
             return {
               ...habit,
@@ -1344,11 +1317,9 @@ export default function App() {
           }
         );
 
-
       setHabits(
         updated
       );
-
 
       Storage.saveHabits(
         updated
@@ -1368,13 +1339,11 @@ export default function App() {
       const cleanContent =
         content.trim();
 
-
       if (
         !cleanContent
       ) {
         return;
       }
-
 
       const newMemory:
         MemoryItem = {
@@ -1392,17 +1361,14 @@ export default function App() {
             .split('T')[0],
       };
 
-
       const updated = [
         newMemory,
         ...memories,
       ];
 
-
       setMemories(
         updated
       );
-
 
       Storage.saveMemories(
         updated
@@ -1420,11 +1386,9 @@ export default function App() {
             memory.id !== id
         );
 
-
       setMemories(
         updated
       );
-
 
       Storage.saveMemories(
         updated
@@ -1443,7 +1407,6 @@ export default function App() {
       const cleanText =
         text.trim();
 
-
       if (
         !cleanText ||
         isLoadingAI
@@ -1451,10 +1414,8 @@ export default function App() {
         return;
       }
 
-
       const now =
         Date.now();
-
 
       const userMsg:
         ChatMessage = {
@@ -1480,34 +1441,25 @@ export default function App() {
           ),
       };
 
-
       const nextHistory = [
         ...chatHistory,
         userMsg,
       ];
 
-
       setChatHistory(
         nextHistory
       );
 
-
-      /**
-       * Save locally immediately.
-       */
       Storage.saveChatHistory(
         nextHistory
       );
-
 
       setIsLoadingAI(
         true
       );
 
-
       const controller =
         new AbortController();
-
 
       const timeoutId =
         window.setTimeout(
@@ -1516,7 +1468,6 @@ export default function App() {
           },
           AI_TIMEOUT_MS
         );
-
 
       try {
         const recentHistory =
@@ -1540,7 +1491,6 @@ export default function App() {
               })
             );
 
-
         const recentMemories =
           memories
             .slice(
@@ -1560,7 +1510,6 @@ export default function App() {
               })
             );
 
-
         const safeProfile = {
           name:
             user?.name ||
@@ -1579,7 +1528,6 @@ export default function App() {
               500
             ),
         };
-
 
         const response =
           await fetch(
@@ -1616,16 +1564,13 @@ export default function App() {
             }
           );
 
-
         if (!response.ok) {
           let serverMessage =
             'AI Agent request failed.';
 
-
           try {
             const errorData =
               await response.json();
-
 
             serverMessage =
               errorData?.error ||
@@ -1635,16 +1580,13 @@ export default function App() {
             // Ignore invalid JSON.
           }
 
-
           throw new Error(
             serverMessage
           );
         }
 
-
         const data =
           await response.json();
-
 
         const agentReply =
           typeof data.reply ===
@@ -1652,7 +1594,6 @@ export default function App() {
           data.reply.trim()
             ? data.reply.trim()
             : 'I processed your request.';
-
 
         const assistantMsg:
           ChatMessage = {
@@ -1682,22 +1623,18 @@ export default function App() {
             null,
         };
 
-
         const finalHistory = [
           ...nextHistory,
           assistantMsg,
         ];
 
-
         setChatHistory(
           finalHistory
         );
 
-
         Storage.saveChatHistory(
           finalHistory
         );
-
 
         if (
           data.newMemory &&
@@ -1711,7 +1648,6 @@ export default function App() {
           );
         }
 
-
         if (
           data.detectedAction
         ) {
@@ -1719,7 +1655,6 @@ export default function App() {
             data.detectedAction
           );
         }
-
 
         if (
           data.usedTool &&
@@ -1729,7 +1664,6 @@ export default function App() {
             'Agent tool used:',
             data.tool
           );
-
 
           if (
             data.toolResult
@@ -1748,10 +1682,8 @@ export default function App() {
           error
         );
 
-
         let errorText =
           'Nodysom AI is temporarily unavailable. Please try again.';
-
 
         if (
           error?.name ===
@@ -1770,7 +1702,6 @@ export default function App() {
           errorText =
             error.message;
         }
-
 
         const errorMsg:
           ChatMessage = {
@@ -1796,17 +1727,14 @@ export default function App() {
             ),
         };
 
-
         const errorHistory = [
           ...nextHistory,
           errorMsg,
         ];
 
-
         setChatHistory(
           errorHistory
         );
-
 
         Storage.saveChatHistory(
           errorHistory
@@ -1815,7 +1743,6 @@ export default function App() {
         window.clearTimeout(
           timeoutId
         );
-
 
         setIsLoadingAI(
           false
@@ -1835,7 +1762,6 @@ export default function App() {
       const category =
         finalAction.category ||
         'General';
-
 
       const newItem:
         PlannerItem = {
@@ -1874,27 +1800,22 @@ export default function App() {
         ],
       };
 
-
       const updated = [
         newItem,
         ...plannerItems,
       ];
 
-
       setPlannerItems(
         updated
       );
-
 
       Storage.savePlannerItems(
         updated
       );
 
-
       setPendingAction(
         null
       );
-
 
       const confirmMsg:
         ChatMessage = {
@@ -1918,7 +1839,6 @@ export default function App() {
             '09:00 AM'
           }.`,
 
-
         timestamp:
           new Date().toLocaleTimeString(
             [],
@@ -1932,17 +1852,14 @@ export default function App() {
           ),
       };
 
-
       const finalHistory = [
         ...chatHistory,
         confirmMsg,
       ];
 
-
       setChatHistory(
         finalHistory
       );
-
 
       Storage.saveChatHistory(
         finalHistory
@@ -1964,7 +1881,6 @@ export default function App() {
         updatedProfile
       );
 
-
       try {
         localStorage.setItem(
           ONBOARDING_KEY,
@@ -1974,11 +1890,9 @@ export default function App() {
         // Ignore storage errors.
       }
 
-
       setIsOnboardingOpen(
         false
       );
-
 
       if (
         initialPrompt
@@ -1998,7 +1912,6 @@ export default function App() {
     () => {
       Storage.clearAllData();
 
-
       const resetUser =
         Storage.getUser();
 
@@ -2013,7 +1926,6 @@ export default function App() {
 
       const resetChat =
         Storage.getChatHistory();
-
 
       setUser(
         resetUser
@@ -2035,6 +1947,326 @@ export default function App() {
         resetChat
       );
     };
+
+
+  // =========================================================
+  // EXPORT MY DATA
+  // =========================================================
+
+  const handleExportAllData =
+    useCallback(
+      async () => {
+        try {
+          /**
+           * Always start with local data.
+           * This guarantees export still works when:
+           * - user is offline
+           * - Supabase is unavailable
+           * - user is not signed in
+           */
+          const localData =
+            latestDataRef.current;
+
+          let exportUser =
+            localData.user;
+
+          let exportMemories =
+            localData.memories;
+
+          let exportPlanner =
+            localData.plannerItems;
+
+          let exportHabits =
+            localData.habits;
+
+          let exportChat =
+            localData.chatHistory;
+
+          let source:
+            | 'local'
+            | 'local + cloud' =
+            'local';
+
+
+          // =================================================
+          // TRY TO INCLUDE SUPABASE DATA
+          // =================================================
+
+          if (
+            cloudUserId &&
+            isSupabaseConfigured
+          ) {
+            try {
+              const cloudData =
+                await loadCloudData(
+                  cloudUserId
+                );
+
+              if (cloudData) {
+                const cloudMemories =
+                  Array.isArray(
+                    cloudData.memories
+                  )
+                    ? cloudData.memories
+                    : [];
+
+                const cloudPlanner =
+                  Array.isArray(
+                    cloudData.plannerItems
+                  )
+                    ? cloudData.plannerItems
+                    : [];
+
+                const cloudHabits =
+                  Array.isArray(
+                    cloudData.habits
+                  )
+                    ? cloudData.habits
+                    : [];
+
+                const cloudChat =
+                  Array.isArray(
+                    cloudData.chatHistory
+                  )
+                    ? cloudData.chatHistory
+                    : [];
+
+
+                // -------------------------------------------
+                // USER
+                // -------------------------------------------
+
+                exportUser = {
+                  ...cloudData.user,
+                  ...localData.user,
+
+                  /**
+                   * Keep authenticated cloud identity when
+                   * available.
+                   */
+                  id:
+                    cloudData.user?.id ||
+                    localData.user.id ||
+                    cloudUserId,
+
+                  email:
+                    cloudEmail ||
+                    cloudData.user?.email ||
+                    localData.user.email,
+                };
+
+
+                // -------------------------------------------
+                // MEMORIES
+                // -------------------------------------------
+
+                exportMemories =
+                  mergeById(
+                    cloudMemories,
+                    localData.memories
+                  );
+
+
+                // -------------------------------------------
+                // PLANNER
+                // -------------------------------------------
+
+                exportPlanner =
+                  mergeById(
+                    cloudPlanner,
+                    localData.plannerItems
+                  );
+
+
+                // -------------------------------------------
+                // HABITS
+                // -------------------------------------------
+
+                exportHabits =
+                  mergeById(
+                    cloudHabits,
+                    localData.habits
+                  );
+
+
+                // -------------------------------------------
+                // CHAT
+                // -------------------------------------------
+
+                /**
+                 * IMPORTANT:
+                 *
+                 * We deliberately use the export-specific
+                 * merge so cloud chat is NOT reduced to the
+                 * normal 200-message application limit.
+                 */
+                exportChat =
+                  mergeChatHistoryForExport(
+                    cloudChat,
+                    localData.chatHistory
+                  );
+
+
+                source =
+                  'local + cloud';
+              }
+            } catch (cloudError) {
+              /**
+               * Cloud export failure must NEVER destroy or
+               * prevent local export.
+               */
+              console.warn(
+                'Cloud export unavailable. Exporting local data instead.',
+                cloudError
+              );
+            }
+          }
+
+
+          // =================================================
+          // APP SETTINGS
+          // =================================================
+
+          const settings =
+            Storage.getAppSettings();
+
+
+          // =================================================
+          // FINAL BACKUP
+          // =================================================
+
+          const backup = {
+            app:
+              'Nodysom AI',
+
+            developer:
+              'ANORD BONIPHACE SOMEKE',
+
+            version:
+              '1.0.0',
+
+            exportedAt:
+              new Date().toISOString(),
+
+            source,
+
+            user:
+              exportUser,
+
+            memories:
+              exportMemories,
+
+            planner:
+              exportPlanner,
+
+            habits:
+              exportHabits,
+
+            chat:
+              exportChat,
+
+            settings,
+          };
+
+
+          // =================================================
+          // CREATE JSON FILE
+          // =================================================
+
+          const json =
+            JSON.stringify(
+              backup,
+              null,
+              2
+            );
+
+          const blob =
+            new Blob(
+              [json],
+              {
+                type:
+                  'application/json;charset=utf-8',
+              }
+            );
+
+          const url =
+            URL.createObjectURL(
+              blob
+            );
+
+          const anchor =
+            document.createElement(
+              'a'
+            );
+
+          anchor.href =
+            url;
+
+          anchor.download =
+            `Nodysom_AI_Backup_${
+              new Date()
+                .toISOString()
+                .split('T')[0]
+            }.json`;
+
+          document.body.appendChild(
+            anchor
+          );
+
+          anchor.click();
+
+          document.body.removeChild(
+            anchor
+          );
+
+          URL.revokeObjectURL(
+            url
+          );
+
+
+          console.log(
+            'Nodysom AI data export completed.',
+            {
+              source,
+              memories:
+                exportMemories.length,
+              planner:
+                exportPlanner.length,
+              habits:
+                exportHabits.length,
+              chat:
+                exportChat.length,
+            }
+          );
+        } catch (error) {
+          console.error(
+            'Export data error:',
+            error
+          );
+
+          /**
+           * Final fallback:
+           *
+           * If anything unexpected happens in the new
+           * export process, use the existing local exporter.
+           */
+          try {
+            Storage.exportAllDataJSON();
+          } catch (
+            fallbackError
+          ) {
+            console.error(
+              'Local export fallback failed:',
+              fallbackError
+            );
+          }
+        }
+      },
+      [
+        cloudUserId,
+        cloudEmail,
+      ]
+    );
 
 
   // =========================================================
@@ -2231,7 +2463,7 @@ export default function App() {
               }
 
               onExportData={
-                Storage.exportAllDataJSON
+                handleExportAllData
               }
 
               onClearAllData={
