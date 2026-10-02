@@ -33,24 +33,25 @@ const PORT =
 
 /* =========================================================
    AI CONFIGURATION
-   GOOGLE GEMINI INTERACTIONS API
+   GOOGLE GEMINI + OPENROUTER FALLBACK
 ========================================================= */
 
-/*
- * Increased from 30 seconds to 120 seconds.
- *
- * This prevents normal Gemini requests, especially Search,
- * Translation and Smart Schedule requests, from timing out
- * too quickly.
- */
 const AI_TIMEOUT_MS = 120000;
 
 const GEMINI_MODEL =
   String(
     process.env.GEMINI_MODEL ||
       "gemini-3.8-flash"
-  )
-    .trim();
+  ).trim();
+
+const OPENROUTER_MODEL =
+  String(
+    process.env.OPENROUTER_MODEL ||
+      "openrouter/free"
+  ).trim();
+
+const OPENROUTER_URL =
+  "https://openrouter.ai/api/v1/chat/completions";
 
 /* =========================================================
    PERFORMANCE SETTINGS
@@ -144,12 +145,18 @@ app.use(
 );
 
 /* =========================================================
-   GOOGLE GEMINI CONFIG
+   GEMINI CONFIG
 ========================================================= */
 
 function getGeminiKey(): string {
   return String(
     process.env.GEMINI_API_KEY || ""
+  ).trim();
+}
+
+function getOpenRouterKey(): string {
+  return String(
+    process.env.OPENROUTER_API_KEY || ""
   ).trim();
 }
 
@@ -171,6 +178,23 @@ function hasGeminiKey(): boolean {
   return (
     key.length > 0 &&
     !isPlaceholderKey(key)
+  );
+}
+
+function hasOpenRouterKey(): boolean {
+  const key =
+    getOpenRouterKey();
+
+  return (
+    key.length > 0 &&
+    !isPlaceholderKey(key)
+  );
+}
+
+function hasAIProvider(): boolean {
+  return (
+    hasGeminiKey() ||
+    hasOpenRouterKey()
   );
 }
 
@@ -417,15 +441,6 @@ async function callGemini(
         message.role !== "system"
     );
 
-  /*
-   * Interactions API supports a string input
-   * as well as structured interaction input.
-   *
-   * We preserve the existing Nodysom history
-   * architecture by composing the messages into
-   * one stateless interaction input.
-   */
-
   const conversationText =
     nonSystemMessages
       .map(
@@ -444,16 +459,6 @@ async function callGemini(
   const input =
     conversationText ||
     "Hello";
-
-  /*
-   * Interaction-scoped configuration.
-   *
-   * system_instruction,
-   * generation_config,
-   * response_format
-   * are intentionally supplied on every
-   * interaction.
-   */
 
   const interactionRequest: any = {
     model:
@@ -477,12 +482,6 @@ async function callGemini(
       systemMessage.content;
   }
 
-  /*
-   * Current Interactions API JSON output.
-   *
-   * response_mime_type is NOT used here.
-   */
-
   if (options?.json) {
     interactionRequest.response_format = {
       type: "text",
@@ -491,16 +490,6 @@ async function callGemini(
         "application/json",
     };
   }
-
-  /*
-   * The SDK request itself receives the same
-   * 120-second timeout as the application-level
-   * timeout below.
-   *
-   * This prevents the SDK/network layer from
-   * waiting indefinitely while still giving
-   * Gemini enough time to answer.
-   */
 
   const interaction =
     await withTimeout(
@@ -528,6 +517,218 @@ async function callGemini(
   return {
     text,
   };
+}
+
+/* =========================================================
+   OPENROUTER FALLBACK
+========================================================= */
+
+async function callOpenRouter(
+  messages: ChatMessage[],
+  options?: {
+    json?: boolean;
+    maxTokens?: number;
+  }
+): Promise<GeminiResponse> {
+  const apiKey =
+    getOpenRouterKey();
+
+  if (!apiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY is not configured."
+    );
+  }
+
+  if (isPlaceholderKey(apiKey)) {
+    throw new Error(
+      "OPENROUTER_API_KEY is still a placeholder."
+    );
+  }
+
+  const body: Record<
+    string,
+    unknown
+  > = {
+    model:
+      OPENROUTER_MODEL,
+
+    messages:
+      messages.map(
+        (message) => ({
+          role:
+            message.role,
+
+          content:
+            message.content,
+        })
+      ),
+
+    max_tokens:
+      options?.maxTokens || 4096,
+  };
+
+  if (options?.json) {
+    body.response_format = {
+      type: "json_object",
+    };
+  }
+
+  const response =
+    await withTimeout(
+      fetch(
+        OPENROUTER_URL,
+        {
+          method: "POST",
+
+          headers: {
+            Authorization:
+              `Bearer ${apiKey}`,
+
+            "Content-Type":
+              "application/json",
+
+            "HTTP-Referer":
+              String(
+                process.env.APP_URL ||
+                  "https://absmg-apps.onrender.com"
+              ),
+
+            "X-Title":
+              "Nodysom AI",
+          },
+
+          body:
+            JSON.stringify(body),
+        }
+      ),
+      AI_TIMEOUT_MS
+    );
+
+  const rawBody =
+    await response.text();
+
+  let payload: any =
+    null;
+
+  try {
+    payload =
+      JSON.parse(
+        rawBody
+      );
+  } catch {
+    payload =
+      null;
+  }
+
+  if (!response.ok) {
+    const providerMessage =
+      cleanText(
+        payload?.error?.message ||
+          payload?.message ||
+          rawBody,
+        1000
+      );
+
+    throw new Error(
+      `OpenRouter API error (${response.status}): ${providerMessage}`
+    );
+  }
+
+  const content =
+    payload
+      ?.choices?.[0]
+      ?.message
+      ?.content;
+
+  const text =
+    cleanText(
+      content,
+      30000
+    );
+
+  if (!text) {
+    throw new Error(
+      "OpenRouter returned an empty response."
+    );
+  }
+
+  return {
+    text,
+  };
+}
+
+/* =========================================================
+   UNIFIED AI PROVIDER
+========================================================= */
+
+async function callAI(
+  messages: ChatMessage[],
+  options?: {
+    json?: boolean;
+    maxTokens?: number;
+  }
+): Promise<GeminiResponse> {
+  let geminiError =
+    "Gemini is unavailable.";
+
+  /*
+   * PRIMARY PROVIDER
+   * Google Gemini
+   */
+
+  if (hasGeminiKey()) {
+    try {
+      return await callGemini(
+        messages,
+        options
+      );
+    } catch (error) {
+      geminiError =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.warn(
+        "[Nodysom AI] Gemini failed. Trying OpenRouter fallback.",
+        geminiError
+      );
+    }
+  } else {
+    geminiError =
+      "GEMINI_API_KEY is not configured.";
+  }
+
+  /*
+   * FALLBACK PROVIDER
+   * OpenRouter
+   */
+
+  if (hasOpenRouterKey()) {
+    try {
+      return await callOpenRouter(
+        messages,
+        options
+      );
+    } catch (error) {
+      const openRouterError =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.error(
+        "[Nodysom AI] OpenRouter fallback failed:",
+        openRouterError
+      );
+
+      throw new Error(
+        `AI providers unavailable. Gemini: ${geminiError} OpenRouter: ${openRouterError}`
+      );
+    }
+  }
+
+  throw new Error(
+    `No usable AI provider is configured. Gemini: ${geminiError}`
+  );
 }
 
 /* =========================================================
@@ -798,7 +999,6 @@ ${historyText}
 
 /* =========================================================
    AGENT AI ANSWER
-   GOOGLE GEMINI JSON PROTOCOL
 ========================================================= */
 
 async function generateAgentAnswer(
@@ -811,15 +1011,18 @@ async function generateAgentAnswer(
       MAX_MESSAGE_LENGTH
     );
 
-  /* -------------------------------------------------------
-     OFFLINE MODE
-  ------------------------------------------------------- */
+  /*
+   * OFFLINE MODE
+   *
+   * Only activate this if BOTH Gemini and
+   * OpenRouter are unavailable.
+   */
 
-  if (!hasGeminiKey()) {
+  if (!hasAIProvider()) {
     return {
       reply: toolResult
         ? `Tool result: ${toolResult}`
-        : `I received your request: "${message}". Google Gemini is not connected yet.`,
+        : `I received your request: "${message}". No AI provider is connected yet.`,
 
       detectedAction:
         null,
@@ -876,7 +1079,7 @@ If another local tool is required, return a toolCall instead.
 
   try {
     const response =
-      await callGemini(
+      await callAI(
         messages,
         {
           json: true,
@@ -907,10 +1110,6 @@ If another local tool is required, return a toolCall instead.
 
     const parsed =
       parseModelJson(raw);
-
-    /* -----------------------------------------------------
-       FALLBACK IF MODEL RETURNS PLAIN TEXT
-    ----------------------------------------------------- */
 
     if (!parsed) {
       return {
@@ -1106,7 +1305,7 @@ If another local tool is required, return a toolCall instead.
         : String(error);
 
     console.error(
-      "[Nodysom AI] Google Gemini request error:",
+      "[Nodysom AI] AI provider request error:",
       errorMessage
     );
 
@@ -1128,7 +1327,7 @@ If another local tool is required, return a toolCall instead.
 
     return {
       reply:
-        "Nodysom AI could not connect to the AI model right now. Please try again.",
+        "Nodysom AI could not connect to an AI provider right now. Please try again.",
 
       detectedAction:
         null,
@@ -1152,20 +1351,35 @@ app.get(
     _req,
     res
   ) => {
-    const rawKey =
+    const rawGeminiKey =
       getGeminiKey();
 
-    const trimmedKey =
-      rawKey.trim();
+    const trimmedGeminiKey =
+      rawGeminiKey.trim();
 
-    const placeholderDetected =
+    const geminiPlaceholderDetected =
       isPlaceholderKey(
-        trimmedKey
+        trimmedGeminiKey
       );
 
-    const hasApiKey =
-      trimmedKey.length > 0 &&
-      !placeholderDetected;
+    const hasUsableGeminiKey =
+      trimmedGeminiKey.length > 0 &&
+      !geminiPlaceholderDetected;
+
+    const rawOpenRouterKey =
+      getOpenRouterKey();
+
+    const trimmedOpenRouterKey =
+      rawOpenRouterKey.trim();
+
+    const openRouterPlaceholderDetected =
+      isPlaceholderKey(
+        trimmedOpenRouterKey
+      );
+
+    const hasUsableOpenRouterKey =
+      trimmedOpenRouterKey.length > 0 &&
+      !openRouterPlaceholderDetected;
 
     res.json({
       status:
@@ -1178,31 +1392,62 @@ app.get(
         "Plan Your Day. Live Smarter.",
 
       aiProvider:
-        "Google Gemini",
+        hasUsableGeminiKey
+          ? "Google Gemini"
+          : hasUsableOpenRouterKey
+            ? "OpenRouter"
+            : "Not configured",
+
+      fallbackProvider:
+        "OpenRouter",
 
       api:
-        "Interactions API",
+        "Gemini Interactions API + OpenRouter",
 
       model:
         GEMINI_MODEL,
 
+      fallbackModel:
+        OPENROUTER_MODEL,
+
       hasGeminiKey:
-        hasApiKey,
+        hasUsableGeminiKey,
+
+      hasOpenRouterKey:
+        hasUsableOpenRouterKey,
 
       geminiDiagnostics: {
         environmentVariableExists:
-          rawKey.length > 0,
+          rawGeminiKey.length > 0,
 
         trimmedValueExists:
-          trimmedKey.length > 0,
+          trimmedGeminiKey.length > 0,
 
         keyLength:
-          trimmedKey.length,
+          trimmedGeminiKey.length,
 
-        placeholderDetected,
+        placeholderDetected:
+          geminiPlaceholderDetected,
 
         usableKeyDetected:
-          hasApiKey,
+          hasUsableGeminiKey,
+      },
+
+      openRouterDiagnostics: {
+        environmentVariableExists:
+          rawOpenRouterKey.length > 0,
+
+        trimmedValueExists:
+          trimmedOpenRouterKey.length > 0,
+
+        keyLength:
+          trimmedOpenRouterKey.length,
+
+        placeholderDetected:
+          openRouterPlaceholderDetected,
+
+        usableKeyDetected:
+          hasUsableOpenRouterKey,
       },
 
       agent: {
@@ -1213,7 +1458,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Google Gemini Interactions API + JSON Agent Protocol + Local Tool Controller",
+          "Gemini + OpenRouter Fallback + JSON Agent Protocol + Local Tool Controller",
 
         tools: [
           "calculator",
@@ -1539,7 +1784,7 @@ app.post(
           30
         );
 
-      if (!hasGeminiKey()) {
+      if (!hasAIProvider()) {
         return res.json({
           summary:
             `Search request received: "${query}"`,
@@ -1598,7 +1843,7 @@ Rules:
         ];
 
       const response =
-        await callGemini(
+        await callAI(
           messages,
           {
             json: false,
@@ -1687,7 +1932,7 @@ app.post(
         });
       }
 
-      if (!hasGeminiKey()) {
+      if (!hasAIProvider()) {
         return res.status(503).json({
           error:
             "Translation AI is not connected.",
@@ -1743,7 +1988,7 @@ Rules:
         ];
 
       const response =
-        await callGemini(
+        await callAI(
           messages,
           {
             json: true,
@@ -1851,7 +2096,7 @@ app.post(
         });
       }
 
-      if (!hasGeminiKey()) {
+      if (!hasAIProvider()) {
         return res.json({
           schedule: [
             {
@@ -1987,7 +2232,7 @@ ${prompt}
         ];
 
       const response =
-        await callGemini(
+        await callAI(
           messages,
           {
             json: true,
@@ -2175,11 +2420,6 @@ async function startServer() {
     );
   }
 
-  /*
-   * Render requires the application to listen
-   * on 0.0.0.0 and the PORT supplied by Render.
-   */
-
   app.listen(
     PORT,
     "0.0.0.0",
@@ -2188,25 +2428,38 @@ async function startServer() {
         `Nodysom AI running on port ${PORT}`
       );
 
-      const runtimeKey =
+      const runtimeGeminiKey =
         getGeminiKey();
 
-      const runtimeKeyUsable =
-        runtimeKey.length > 0 &&
+      const runtimeOpenRouterKey =
+        getOpenRouterKey();
+
+      const geminiUsable =
+        runtimeGeminiKey.length > 0 &&
         !isPlaceholderKey(
-          runtimeKey
+          runtimeGeminiKey
+        );
+
+      const openRouterUsable =
+        runtimeOpenRouterKey.length > 0 &&
+        !isPlaceholderKey(
+          runtimeOpenRouterKey
         );
 
       console.log(
-        `[Nodysom AI] Google Gemini key available: ${runtimeKeyUsable}`
+        `[Nodysom AI] Gemini available: ${geminiUsable}`
       );
 
       console.log(
-        `[Nodysom AI] Google Gemini API: Interactions`
+        `[Nodysom AI] OpenRouter available: ${openRouterUsable}`
       );
 
       console.log(
-        `[Nodysom AI] Google Gemini model: ${GEMINI_MODEL}`
+        `[Nodysom AI] Gemini model: ${GEMINI_MODEL}`
+      );
+
+      console.log(
+        `[Nodysom AI] OpenRouter model: ${OPENROUTER_MODEL}`
       );
 
       console.log(
