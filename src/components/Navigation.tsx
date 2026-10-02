@@ -201,7 +201,9 @@ export function BottomNav({
 
   return (
     <nav
-      className="safe-bottom fixed inset-x-0 bottom-0 z-[99999] border-t border-white/[0.08] bg-slate-950/90 backdrop-blur-2xl"
+  
+  aria-label="Primary navigation"
+  className="safe-bottom fixed inset-x-0 bottom-0 z-[99999]   border-t border-white/[0.08] bg-slate-950/90 backdrop-blur-2xl"
       style={{
         touchAction: 'manipulation',
         WebkitTapHighlightColor:
