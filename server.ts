@@ -145,7 +145,7 @@ app.use(
 );
 
 /* =========================================================
-   GEMINI CONFIG
+   AI KEYS
 ========================================================= */
 
 function getGeminiKey(): string {
@@ -199,7 +199,7 @@ function hasAIProvider(): boolean {
 }
 
 /* =========================================================
-   GENERIC JSON TYPES
+   GENERIC TYPES
 ========================================================= */
 
 type JsonRecord =
@@ -399,7 +399,7 @@ Goals: ${cleanText(
 }
 
 /* =========================================================
-   GOOGLE GEMINI INTERACTIONS API
+   GOOGLE GEMINI
 ========================================================= */
 
 async function callGemini(
@@ -520,11 +520,7 @@ async function callGemini(
 }
 
 /* =========================================================
-   OPENROUTER FALLBACK
-========================================================= */
-
-/* =========================================================
-   OPENROUTER FALLBACK
+   OPENROUTER
 ========================================================= */
 
 async function callOpenRouter(
@@ -532,6 +528,7 @@ async function callOpenRouter(
   options?: {
     json?: boolean;
     maxTokens?: number;
+    tools?: unknown[];
   }
 ): Promise<GeminiResponse> {
   const apiKey =
@@ -553,16 +550,27 @@ async function callOpenRouter(
     model:
       OPENROUTER_MODEL,
 
-    messages: messages.map(
-      (message) => ({
-        role: message.role,
-        content: message.content,
-      })
-    ),
+    messages:
+      messages.map(
+        (message) => ({
+          role:
+            message.role,
+          content:
+            message.content,
+        })
+      ),
 
     max_tokens:
       options?.maxTokens || 4096,
   };
+
+  if (
+    options?.tools &&
+    options.tools.length > 0
+  ) {
+    body.tools =
+      options.tools;
+  }
 
   if (options?.json) {
     body.response_format = {
@@ -573,7 +581,7 @@ async function callOpenRouter(
   const response =
     await withTimeout(
       fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
+        OPENROUTER_URL,
         {
           method: "POST",
 
@@ -619,7 +627,7 @@ async function callOpenRouter(
         data?.error?.message ||
         data?.message ||
         rawBody,
-        1000
+        1500
       );
 
     throw new Error(
@@ -630,9 +638,27 @@ async function callOpenRouter(
   const content =
     data?.choices?.[0]?.message?.content;
 
-  const text =
+  let text = "";
+
+  if (typeof content === "string") {
+    text = content;
+  } else if (
+    Array.isArray(content)
+  ) {
+    text =
+      content
+        .map(
+          (item: any) =>
+            typeof item === "string"
+              ? item
+              : item?.text || ""
+        )
+        .join("\n");
+  }
+
+  text =
     cleanText(
-      content,
+      text,
       30000
     );
 
@@ -662,8 +688,7 @@ async function callAI(
     "Gemini is unavailable.";
 
   /*
-   * PRIMARY PROVIDER
-   * Google Gemini
+   * PRIMARY
    */
 
   if (hasGeminiKey()) {
@@ -689,8 +714,7 @@ async function callAI(
   }
 
   /*
-   * FALLBACK PROVIDER
-   * OpenRouter
+   * FALLBACK
    */
 
   if (hasOpenRouterKey()) {
@@ -757,7 +781,7 @@ function parseModelJson(
       return parsed as JsonRecord;
     }
   } catch {
-    // Continue below.
+    // Continue.
   }
 
   const cleaned =
@@ -863,27 +887,6 @@ calculator
 time
 text_stats
 
-For calculator:
-
-{
-  "tool": "calculator",
-  "input": "25 * 40"
-}
-
-For time:
-
-{
-  "tool": "time",
-  "input": "current"
-}
-
-For text_stats:
-
-{
-  "tool": "text_stats",
-  "input": "text to analyze"
-}
-
 ==================================================
 TOOL RESULT
 ==================================================
@@ -928,17 +931,6 @@ A detectedAction is ONLY a proposal.
 
 Never claim that an action has already been saved,
 scheduled, created, or completed.
-
-Use:
-
-{
-  "type": "TASK",
-  "title": "Example task",
-  "date": "2026-09-20",
-  "time": "10:00",
-  "category": "General",
-  "amount": null
-}
 
 Allowed action types:
 
@@ -1001,13 +993,6 @@ async function generateAgentAnswer(
       MAX_MESSAGE_LENGTH
     );
 
-  /*
-   * OFFLINE MODE
-   *
-   * Only activate this if BOTH Gemini and
-   * OpenRouter are unavailable.
-   */
-
   if (!hasAIProvider()) {
     return {
       reply: toolResult
@@ -1035,14 +1020,12 @@ async function generateAgentAnswer(
     ChatMessage[] = [
       {
         role: "system",
-
         content:
           systemInstruction,
       },
 
       {
         role: "user",
-
         content:
           message,
       },
@@ -1117,9 +1100,9 @@ If another local tool is required, return a toolCall instead.
       };
     }
 
-    /* -----------------------------------------------------
+    /* =====================================================
        TOOL REQUEST
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const toolCall =
       parsed.toolCall;
@@ -1178,9 +1161,9 @@ If another local tool is required, return a toolCall instead.
       }
     }
 
-    /* -----------------------------------------------------
+    /* =====================================================
        NORMAL RESPONSE
-    ----------------------------------------------------- */
+    ===================================================== */
 
     const reply =
       cleanText(
@@ -1189,9 +1172,9 @@ If another local tool is required, return a toolCall instead.
       ) ||
       "I am here to help.";
 
-    /* -----------------------------------------------------
+    /* =====================================================
        DETECTED ACTION
-    ----------------------------------------------------- */
+    ===================================================== */
 
     let detectedAction:
       any = null;
@@ -1405,6 +1388,22 @@ app.get(
 
       hasOpenRouterKey:
         hasUsableOpenRouterKey,
+
+      search:
+        {
+          enabled:
+            hasUsableGeminiKey ||
+            hasUsableOpenRouterKey,
+
+          primary:
+            "Gemini Google Search",
+
+          fallback:
+            "OpenRouter Web Search",
+
+          endpoint:
+            "/api/ai/search",
+        },
 
       geminiDiagnostics: {
         environmentVariableExists:
@@ -1744,7 +1743,531 @@ app.post(
 );
 
 /* =========================================================
-   SIMPLE SEARCH
+   SEARCH TYPES
+========================================================= */
+
+interface SearchSource {
+  title: string;
+  url: string;
+}
+
+interface SearchResultPayload {
+  query: string;
+  summary: string;
+  verifiedFacts: string[];
+  estimates: string[];
+  uncertainties: string[];
+  sources: SearchSource[];
+  suggestedActions: string[];
+  provider?: string;
+  latency?: number;
+}
+
+/* =========================================================
+   SEARCH URL VALIDATION
+========================================================= */
+
+function isValidHttpUrl(
+  value: unknown
+): boolean {
+  try {
+    const url =
+      new URL(
+        String(value || "")
+      );
+
+    return (
+      url.protocol ===
+        "http:" ||
+      url.protocol ===
+        "https:"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/* =========================================================
+   SEARCH SOURCE EXTRACTION
+========================================================= */
+
+function extractUrlsFromValue(
+  value: unknown,
+  found: Map<string, SearchSource>,
+  depth = 0
+): void {
+  if (
+    depth > 7 ||
+    value === null ||
+    value === undefined
+  ) {
+    return;
+  }
+
+  if (
+    found.size >= 15
+  ) {
+    return;
+  }
+
+  if (
+    typeof value === "string"
+  ) {
+    const urlMatches =
+      value.match(
+        /https?:\/\/[^\s"'<>\\]+/g
+      ) || [];
+
+    for (
+      const rawUrl of urlMatches
+    ) {
+      const cleanedUrl =
+        rawUrl
+          .replace(
+            /[),.;]+$/,
+            ""
+          )
+          .trim();
+
+      if (
+        isValidHttpUrl(
+          cleanedUrl
+        )
+      ) {
+        if (
+          !found.has(
+            cleanedUrl
+          )
+        ) {
+          found.set(
+            cleanedUrl,
+            {
+              title:
+                cleanedUrl,
+              url:
+                cleanedUrl,
+            }
+          );
+        }
+      }
+    }
+
+    return;
+  }
+
+  if (
+    Array.isArray(value)
+  ) {
+    for (
+      const item of value
+    ) {
+      extractUrlsFromValue(
+        item,
+        found,
+        depth + 1
+      );
+
+      if (
+        found.size >= 15
+      ) {
+        break;
+      }
+    }
+
+    return;
+  }
+
+  if (
+    typeof value ===
+    "object"
+  ) {
+    const object =
+      value as Record<
+        string,
+        unknown
+      >;
+
+    const possibleUrl =
+      object.url ||
+      object.uri ||
+      object.link ||
+      object.href;
+
+    const possibleTitle =
+      object.title ||
+      object.name ||
+      object.text ||
+      object.source;
+
+    if (
+      isValidHttpUrl(
+        possibleUrl
+      )
+    ) {
+      const url =
+        String(
+          possibleUrl
+        ).trim();
+
+      const title =
+        cleanText(
+          possibleTitle ||
+            url,
+          300
+        );
+
+      if (
+        !found.has(url)
+      ) {
+        found.set(
+          url,
+          {
+            title,
+            url,
+          }
+        );
+      }
+    }
+
+    for (
+      const [key, child] of
+      Object.entries(object)
+    ) {
+      /*
+       * Avoid treating huge metadata fields
+       * as sources unless they actually contain URLs.
+       */
+      if (
+        key === "apiKey" ||
+        key === "authorization" ||
+        key === "headers"
+      ) {
+        continue;
+      }
+
+      extractUrlsFromValue(
+        child,
+        found,
+        depth + 1
+      );
+
+      if (
+        found.size >= 15
+      ) {
+        break;
+      }
+    }
+  }
+}
+
+function extractSearchSources(
+  value: unknown
+): SearchSource[] {
+  const found =
+    new Map<
+      string,
+      SearchSource
+    >();
+
+  extractUrlsFromValue(
+    value,
+    found
+  );
+
+  return Array.from(
+    found.values()
+  ).slice(0, 10);
+}
+
+/* =========================================================
+   GEMINI WEB SEARCH
+========================================================= */
+
+async function callGeminiSearch(
+  query: string,
+  language: string
+): Promise<{
+  summary: string;
+  sources: SearchSource[];
+}> {
+  const apiKey =
+    getGeminiKey();
+
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY is not configured."
+    );
+  }
+
+  if (
+    isPlaceholderKey(apiKey)
+  ) {
+    throw new Error(
+      "GEMINI_API_KEY is still a placeholder."
+    );
+  }
+
+  const ai =
+    new GoogleGenAI({
+      apiKey,
+    });
+
+  const searchPrompt = `
+You are Nodysom AI's live web search assistant.
+
+Search the web for the user's query and provide
+an accurate, useful answer.
+
+USER QUERY:
+${query}
+
+LANGUAGE:
+${language}
+
+Instructions:
+
+1. Use Google Search to verify current information.
+2. Prefer official and authoritative sources.
+3. For current facts, use recent sources where possible.
+4. Do not invent facts, websites, citations, or URLs.
+5. Clearly mention uncertainty when reliable information
+   cannot be verified.
+6. Answer in the requested language.
+7. Keep the answer useful and reasonably concise.
+8. Include the important facts directly in the answer.
+`;
+
+  const interaction =
+    await withTimeout(
+      ai.interactions.create(
+        {
+          model:
+            GEMINI_MODEL,
+
+          input:
+            searchPrompt,
+
+          tools: [
+            {
+              type:
+                "google_search",
+            },
+          ],
+
+          generation_config: {
+            max_output_tokens:
+              4000,
+
+            thinking_level:
+              "low",
+          },
+        } as any,
+        {
+          timeout:
+            AI_TIMEOUT_MS,
+        }
+      )
+    );
+
+  const summary =
+    cleanText(
+      interaction.output_text,
+      30000
+    );
+
+  if (!summary) {
+    throw new Error(
+      "Gemini web search returned an empty response."
+    );
+  }
+
+  /*
+   * Search citations can appear in different parts
+   * of the Interactions API response. Search the
+   * response recursively for URLs.
+   */
+
+  const sources =
+    extractSearchSources(
+      interaction
+    );
+
+  return {
+    summary,
+    sources,
+  };
+}
+
+/* =========================================================
+   OPENROUTER WEB SEARCH
+========================================================= */
+
+async function callOpenRouterSearch(
+  query: string,
+  language: string
+): Promise<{
+  summary: string;
+  sources: SearchSource[];
+}> {
+  const apiKey =
+    getOpenRouterKey();
+
+  if (!apiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY is not configured."
+    );
+  }
+
+  if (
+    isPlaceholderKey(apiKey)
+  ) {
+    throw new Error(
+      "OPENROUTER_API_KEY is still a placeholder."
+    );
+  }
+
+  const messages:
+    ChatMessage[] = [
+      {
+        role:
+          "system",
+
+        content:
+          `
+You are Nodysom AI's live web search assistant.
+
+Use the web search tool to research the user's
+query before answering.
+
+Language:
+${language}
+
+Rules:
+
+- Search the web.
+- Prefer official and authoritative sources.
+- Do not invent facts.
+- Do not invent URLs.
+- Distinguish verified information from uncertainty.
+- Give a concise but useful answer.
+`,
+      },
+
+      {
+        role:
+          "user",
+
+        content:
+          query,
+      },
+    ];
+
+  const response =
+    await callOpenRouter(
+      messages,
+      {
+        json: false,
+
+        maxTokens:
+          4000,
+
+        tools: [
+          {
+            type:
+              "openrouter:web_search",
+          },
+        ],
+      }
+    );
+
+  const summary =
+    extractResponseText(
+      response
+    );
+
+  if (!summary) {
+    throw new Error(
+      "OpenRouter web search returned an empty response."
+    );
+  }
+
+  /*
+   * OpenRouter citations can be present in the
+   * model response/annotations. Since callOpenRouter
+   * intentionally returns only text, attempt to
+   * recover URLs directly from the generated result.
+   */
+
+  const sources =
+    extractSearchSources(
+      summary
+    );
+
+  return {
+    summary,
+    sources,
+  };
+}
+
+/* =========================================================
+   BUILD SEARCH RESULT
+========================================================= */
+
+function buildSearchResult(
+  query: string,
+  summary: string,
+  sources: SearchSource[],
+  provider: string,
+  latency: number
+): SearchResultPayload {
+  const verifiedFacts =
+    summary
+      .split(/\n+/)
+      .map(
+        (line) =>
+          line
+            .replace(
+              /^[-*•]\s*/,
+              ""
+            )
+            .replace(
+              /^\d+[.)]\s*/,
+              ""
+            )
+            .trim()
+      )
+      .filter(
+        (line) =>
+          line.length > 30 &&
+          line.length < 600
+      )
+      .slice(0, 8);
+
+  return {
+    query,
+
+    summary:
+      summary ||
+      "No result available.",
+
+    verifiedFacts,
+
+    estimates: [],
+
+    uncertainties: [],
+
+    sources,
+
+    suggestedActions: [],
+
+    provider,
+
+    latency,
+  };
+}
+
+/* =========================================================
+   REAL AI WEB SEARCH
 ========================================================= */
 
 app.post(
@@ -1753,6 +2276,9 @@ app.post(
     req,
     res
   ) => {
+    const startedAt =
+      Date.now();
+
     try {
       const query =
         cleanText(
@@ -1774,82 +2300,132 @@ app.post(
           30
         );
 
-      if (!hasAIProvider()) {
-        return res.json({
-          summary:
-            `Search request received: "${query}"`,
+      /*
+       * ================================================
+       * GEMINI GOOGLE SEARCH PRIMARY
+       * ================================================
+       */
 
-          verifiedFacts:
-            [],
+      if (hasGeminiKey()) {
+        try {
+          console.log(
+            "[Nodysom Search] Trying Gemini Google Search..."
+          );
 
-          estimates:
-            [],
+          const result =
+            await callGeminiSearch(
+              query,
+              language
+            );
 
-          uncertainties: [
-            "AI search service is not connected.",
-          ],
+          const latency =
+            Date.now() -
+            startedAt;
 
-          sources:
-            [],
+          console.log(
+            `[Nodysom Search] Gemini web search succeeded in ${latency}ms with ${result.sources.length} sources.`
+          );
 
-          suggestedActions:
-            [],
-        });
+          return res.json(
+            buildSearchResult(
+              query,
+              result.summary,
+              result.sources,
+              "Google Gemini + Google Search",
+              latency
+            )
+          );
+
+        } catch (geminiError) {
+          console.warn(
+            "[Nodysom Search] Gemini web search failed. Trying OpenRouter.",
+            geminiError instanceof Error
+              ? geminiError.message
+              : geminiError
+          );
+        }
       }
 
-      const messages:
-        ChatMessage[] = [
-          {
-            role:
-              "system",
+      /*
+       * ================================================
+       * OPENROUTER WEB SEARCH FALLBACK
+       * ================================================
+       */
 
-            content:
-              `
-You are Nodysom AI search assistant.
+      if (hasOpenRouterKey()) {
+        try {
+          console.log(
+            "[Nodysom Search] Trying OpenRouter Web Search..."
+          );
 
-Answer the user's search request clearly.
-
-Language:
-${language}
-
-Rules:
-
-- Do not invent sources.
-- Clearly distinguish known information
-  from uncertainty.
-- If you cannot verify something, say so.
-- Do not fabricate URLs.
-- Return a useful concise answer.
-`,
-          },
-
-          {
-            role:
-              "user",
-
-            content:
+          const result =
+            await callOpenRouterSearch(
               query,
-          },
-        ];
+              language
+            );
 
-      const response =
-        await callAI(
-          messages,
-          {
-            json: false,
-            maxTokens: 3000,
-          }
-        );
+          const latency =
+            Date.now() -
+            startedAt;
 
-      const summary =
-        extractResponseText(
-          response
-        );
+          console.log(
+            `[Nodysom Search] OpenRouter web search succeeded in ${latency}ms with ${result.sources.length} sources.`
+          );
 
-      return res.json({
+          return res.json(
+            buildSearchResult(
+              query,
+              result.summary,
+              result.sources,
+              "OpenRouter Web Search",
+              latency
+            )
+          );
+
+        } catch (openRouterError) {
+          console.error(
+            "[Nodysom Search] OpenRouter web search failed:",
+            openRouterError instanceof Error
+              ? openRouterError.message
+              : openRouterError
+          );
+
+          return res.status(503).json({
+            error:
+              "Live web search is temporarily unavailable.",
+
+            details:
+              openRouterError instanceof Error
+                ? openRouterError.message
+                : String(
+                    openRouterError
+                  ),
+
+            query,
+
+            sources:
+              [],
+
+            suggestedActions:
+              [],
+          });
+        }
+      }
+
+      /*
+       * ================================================
+       * NO SEARCH PROVIDER
+       * ================================================
+       */
+
+      return res.status(503).json({
+        error:
+          "No AI search provider is configured.",
+
+        query,
+
         summary:
-          summary ||
-          "No result available.",
+          "Connect Gemini or OpenRouter to enable live web search.",
 
         verifiedFacts:
           [],
@@ -1857,19 +2433,27 @@ Rules:
         estimates:
           [],
 
-        uncertainties:
-          [],
+        uncertainties: [
+          "No live search provider is configured.",
+        ],
 
         sources:
           [],
 
         suggestedActions:
-          [],
+          [
+            "Configure GEMINI_API_KEY.",
+            "Configure OPENROUTER_API_KEY.",
+          ],
       });
 
     } catch (error: any) {
+      const latency =
+        Date.now() -
+        startedAt;
+
       console.error(
-        "[Nodysom Search] Error:",
+        `[Nodysom Search] Error after ${latency}ms:`,
         error instanceof Error
           ? error.message
           : error
@@ -1879,6 +2463,17 @@ Rules:
         error:
           error?.message ||
           "Search failed.",
+
+        query:
+          cleanText(
+            req.body?.query,
+            1500
+          ),
+
+        sources:
+          [],
+
+        latency,
       });
     }
   }
@@ -2454,6 +3049,14 @@ async function startServer() {
 
       console.log(
         `[Nodysom AI] AI request timeout: ${AI_TIMEOUT_MS}ms`
+      );
+
+      console.log(
+        `[Nodysom Search] Primary: Gemini Google Search`
+      );
+
+      console.log(
+        `[Nodysom Search] Fallback: OpenRouter Web Search`
       );
     }
   );
