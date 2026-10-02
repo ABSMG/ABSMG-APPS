@@ -2194,7 +2194,7 @@ export default function App() {
               'Nodysom AI',
 
             developer:
-              'ANORD BONIPHACE SOMEKE',
+              'ANORD BONIPHACE',
 
             version:
               '1.0.0',
@@ -2346,7 +2346,7 @@ export default function App() {
                 'Nodysom AI',
 
               developer:
-                'ANORD BONIPHACE SOMEKE',
+                'ANORD BONIPHACE',
 
               version:
                 '1.0.0',
@@ -2469,7 +2469,7 @@ export default function App() {
         className={`w-full flex flex-col transition-all duration-300 ${
           isPhoneFrame
             ? 'max-w-[420px] h-[860px] max-h-[92vh] rounded-[44px] border-[8px] border-slate-800 shadow-2xl shadow-black overflow-hidden relative bg-slate-950'
-            : 'max-w-2xl min-h-screen relative'
+            : 'max-w-7xl min-h-screen relative'
         }`}
       >
 
@@ -2509,7 +2509,7 @@ export default function App() {
         />
 
 
-        <main className="flex-1 overflow-y-auto">
+       <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain"> 
 
           {currentTab ===
             'home' && (
