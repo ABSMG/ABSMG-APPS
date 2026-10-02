@@ -2140,7 +2140,7 @@ export default function App() {
               'Nodysom AI',
 
             developer:
-              'ANORD BONIPHACE SOMEKE',
+              'ANORD BONIPHACE',
 
             version:
               '1.0.0',
