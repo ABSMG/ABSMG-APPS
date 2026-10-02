@@ -7,7 +7,9 @@ import {
   ArrowRight,
   BookOpen,
   CalendarDays,
+  Check,
   CheckCircle2,
+  Copy,
   Loader2,
   MessageCircle,
   Search,
@@ -52,6 +54,427 @@ interface HomeViewProps {
   ) => void;
 }
 
+/* =========================================================
+   AI RESPONSE RENDERER
+   ========================================================= */
+
+function renderInlineText(
+  text: string
+) {
+  const parts = text.split(
+    /(\*\*[^*]+\*\*|`[^`]+`)/g
+  );
+
+  return parts.map(
+    (part, index) => {
+      if (
+        part.startsWith('**') &&
+        part.endsWith('**')
+      ) {
+        return (
+          <strong
+            key={index}
+            className="font-bold text-white"
+          >
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+
+      if (
+        part.startsWith('`') &&
+        part.endsWith('`')
+      ) {
+        return (
+          <code
+            key={index}
+            className="rounded-md border border-white/[0.08] bg-slate-950/70 px-1.5 py-0.5 text-[12px] text-indigo-300"
+          >
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+
+      return (
+        <React.Fragment key={index}>
+          {part}
+        </React.Fragment>
+      );
+    }
+  );
+}
+
+function renderAssistantContent(
+  content: string
+) {
+  const lines = content
+    .replace(/\r/g, '')
+    .split('\n');
+
+  const elements: React.ReactNode[] = [];
+
+  let listItems: string[] = [];
+
+  let listType:
+    | 'bullet'
+    | 'number'
+    | null = null;
+
+  let codeLines: string[] = [];
+
+  let inCode = false;
+
+  const flushList = () => {
+    if (
+      !listItems.length ||
+      !listType
+    ) {
+      return;
+    }
+
+    const items = [
+      ...listItems,
+    ];
+
+    const type = listType;
+
+    if (type === 'number') {
+      elements.push(
+        <ol
+          key={`list-${elements.length}`}
+          className="ml-5 list-decimal space-y-2 marker:text-indigo-400"
+        >
+          {items.map(
+            (
+              item,
+              index
+            ) => (
+              <li
+                key={index}
+                className="pl-1 text-slate-300"
+              >
+                {renderInlineText(
+                  item
+                )}
+              </li>
+            )
+          )}
+        </ol>
+      );
+    } else {
+      elements.push(
+        <ul
+          key={`list-${elements.length}`}
+          className="ml-5 list-disc space-y-2 marker:text-indigo-400"
+        >
+          {items.map(
+            (
+              item,
+              index
+            ) => (
+              <li
+                key={index}
+                className="pl-1 text-slate-300"
+              >
+                {renderInlineText(
+                  item
+                )}
+              </li>
+            )
+          )}
+        </ul>
+      );
+    }
+
+    listItems = [];
+    listType = null;
+  };
+
+  const flushCode = () => {
+    if (!codeLines.length) {
+      return;
+    }
+
+    elements.push(
+      <div
+        key={`code-${elements.length}`}
+        className="overflow-hidden rounded-2xl border border-white/[0.08] bg-slate-950/90"
+      >
+        <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2">
+          <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-slate-600">
+            Code
+          </span>
+
+          <span className="flex gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
+          </span>
+        </div>
+
+        <pre className="overflow-x-auto p-4 text-xs leading-6 text-slate-300">
+          <code>
+            {codeLines.join('\n')}
+          </code>
+        </pre>
+      </div>
+    );
+
+    codeLines = [];
+  };
+
+  lines.forEach(
+    (
+      rawLine,
+      index
+    ) => {
+      const line =
+        rawLine.trimEnd();
+
+      const trimmed =
+        line.trim();
+
+      /* CODE BLOCK */
+
+      if (
+        trimmed.startsWith(
+          '```'
+        )
+      ) {
+        flushList();
+
+        if (inCode) {
+          flushCode();
+        }
+
+        inCode = !inCode;
+
+        return;
+      }
+
+      if (inCode) {
+        codeLines.push(
+          line
+        );
+
+        return;
+      }
+
+      /* EMPTY LINE */
+
+      if (!trimmed) {
+        flushList();
+
+        return;
+      }
+
+      /* HEADINGS */
+
+      const heading =
+        trimmed.match(
+          /^(#{1,3})\s+(.+)$/
+        );
+
+      if (heading) {
+        flushList();
+
+        const level =
+          heading[1].length;
+
+        const headingText =
+          heading[2]
+            .replace(
+              /\*\*/g,
+              ''
+            )
+            .replace(
+              /__/g,
+              ''
+            );
+
+        elements.push(
+          <div
+            key={`heading-${index}`}
+            className={
+              level === 1
+                ? 'pt-2 text-xl font-black tracking-tight text-white'
+                : level === 2
+                  ? 'pt-2 text-lg font-extrabold text-white'
+                  : 'pt-1 text-sm font-bold text-indigo-200'
+            }
+          >
+            {renderInlineText(
+              headingText
+            )}
+          </div>
+        );
+
+        return;
+      }
+
+      /* BULLET LIST */
+
+      const bullet =
+        trimmed.match(
+          /^(?:[-*•])\s+(.+)$/
+        );
+
+      if (bullet) {
+        if (
+          listType &&
+          listType !==
+            'bullet'
+        ) {
+          flushList();
+        }
+
+        listType = 'bullet';
+
+        listItems.push(
+          bullet[1]
+        );
+
+        return;
+      }
+
+      /* NUMBERED LIST */
+
+      const numbered =
+        trimmed.match(
+          /^\d+[.)]\s+(.+)$/
+        );
+
+      if (numbered) {
+        if (
+          listType &&
+          listType !==
+            'number'
+        ) {
+          flushList();
+        }
+
+        listType = 'number';
+
+        listItems.push(
+          numbered[1]
+        );
+
+        return;
+      }
+
+      /* QUOTE */
+
+      const quote =
+        trimmed.match(
+          /^>\s*(.+)$/
+        );
+
+      if (quote) {
+        flushList();
+
+        elements.push(
+          <blockquote
+            key={`quote-${index}`}
+            className="rounded-r-xl border-l-2 border-indigo-400/50 bg-indigo-500/[0.05] px-4 py-3 text-sm italic leading-6 text-slate-400"
+          >
+            {renderInlineText(
+              quote[1]
+            )}
+          </blockquote>
+        );
+
+        return;
+      }
+
+      /* SIMPLE TABLE */
+
+      if (
+        trimmed.includes('|') &&
+        trimmed
+          .split('|')
+          .filter(Boolean)
+          .length >= 2
+      ) {
+        const cells =
+          trimmed
+            .split('|')
+            .map(
+              (cell) =>
+                cell.trim()
+            )
+            .filter(Boolean);
+
+        const isSeparator =
+          cells.every(
+            (cell) =>
+              /^:?-{2,}:?$/.test(
+                cell
+              )
+          );
+
+        if (!isSeparator) {
+          flushList();
+
+          elements.push(
+            <div
+              key={`table-${index}`}
+              className="grid gap-2 border-b border-white/[0.05] py-2"
+              style={{
+                gridTemplateColumns:
+                  `repeat(${cells.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {cells.map(
+                (
+                  cell,
+                  cellIndex
+                ) => (
+                  <div
+                    key={
+                      cellIndex
+                    }
+                    className="min-w-0 break-words text-xs leading-5 text-slate-300"
+                  >
+                    {renderInlineText(
+                      cell
+                    )}
+                  </div>
+                )
+              )}
+            </div>
+          );
+
+          return;
+        }
+      }
+
+      /* NORMAL PARAGRAPH */
+
+      flushList();
+
+      elements.push(
+        <p
+          key={`paragraph-${index}`}
+          className="whitespace-pre-wrap text-sm leading-7 text-slate-300"
+        >
+          {renderInlineText(
+            trimmed
+          )}
+        </p>
+      );
+    }
+  );
+
+  flushList();
+  flushCode();
+
+  return elements;
+}
+
+/* =========================================================
+   HOME VIEW
+   ========================================================= */
+
 export function HomeView({
   user,
   chatHistory = [],
@@ -66,9 +489,20 @@ export function HomeView({
   const [message, setMessage] =
     useState('');
 
+  const [
+    copiedMessageId,
+    setCopiedMessageId,
+  ] = useState<
+    string | null
+  >(null);
+
   const name =
     user?.name?.trim() ||
     'there';
+
+  /* =======================================================
+     SEND MESSAGE
+     ======================================================= */
 
   const handleSubmit = (
     event: FormEvent<HTMLFormElement>
@@ -85,14 +519,16 @@ export function HomeView({
       return;
     }
 
-    if (onSendMessage) {
-      onSendMessage(
-        cleanMessage
-      );
+    onSendMessage?.(
+      cleanMessage
+    );
 
-      setMessage('');
-    }
+    setMessage('');
   };
+
+  /* =======================================================
+     QUICK PROMPT
+     ======================================================= */
 
   const handleQuickPrompt = (
     prompt: string
@@ -108,6 +544,46 @@ export function HomeView({
       prompt.trim()
     );
   };
+
+  /* =======================================================
+     COPY AI RESPONSE
+     ======================================================= */
+
+  const handleCopy = async (
+    item: ChatMessage
+  ) => {
+    try {
+      await navigator.clipboard.writeText(
+        item.content
+      );
+
+      setCopiedMessageId(
+        item.id
+      );
+
+      window.setTimeout(
+        () => {
+          setCopiedMessageId(
+            (current) =>
+              current ===
+              item.id
+                ? null
+                : current
+          );
+        },
+        1600
+      );
+    } catch (error) {
+      console.warn(
+        'Could not copy message:',
+        error
+      );
+    }
+  };
+
+  /* =======================================================
+     QUICK ACTIONS
+     ======================================================= */
 
   const actions = [
     {
@@ -125,7 +601,9 @@ export function HomeView({
         'Find verified information',
       icon: Search,
       action: () =>
-        onNavigate?.('search'),
+        onNavigate?.(
+          'search'
+        ),
     },
     {
       title: 'Learn',
@@ -133,7 +611,9 @@ export function HomeView({
         'Study smarter every day',
       icon: BookOpen,
       action: () =>
-        onNavigate?.('learn'),
+        onNavigate?.(
+          'learn'
+        ),
     },
     {
       title: 'Planner',
@@ -141,12 +621,22 @@ export function HomeView({
         'Organize your day',
       icon: CalendarDays,
       action: () =>
-        onNavigate?.('planner'),
+        onNavigate?.(
+          'planner'
+        ),
     },
   ];
 
+  /* =======================================================
+     RECENT MESSAGES
+     ======================================================= */
+
   const recentMessages =
-    chatHistory.slice(-4);
+    chatHistory.slice(-6);
+
+  /* =======================================================
+     TODAY TASKS
+     ======================================================= */
 
   const todayTasks =
     plannerItems
@@ -162,7 +652,10 @@ export function HomeView({
   return (
     <main className="nodysom-fade-up mx-auto w-full max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:px-8">
 
-      {/* HERO */}
+      {/* =================================================
+          HERO
+          ================================================= */}
+
       <section className="relative overflow-hidden rounded-[28px] border border-white/[0.08] bg-gradient-to-br from-indigo-500/[0.16] via-violet-500/[0.08] to-transparent p-5 shadow-2xl shadow-indigo-950/20 sm:p-8">
 
         <div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
@@ -185,14 +678,18 @@ export function HomeView({
           </h2>
 
           <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">
-            Ask questions, learn new things,
-            plan your day, and get things done
-            with Nodysom AI.
+            Ask questions, learn new
+            things, plan your day,
+            and get things done with
+            Nodysom AI.
           </p>
 
           {/* AI INPUT */}
+
           <form
-            onSubmit={handleSubmit}
+            onSubmit={
+              handleSubmit
+            }
             className="mt-7 max-w-2xl"
           >
             <div className="flex items-center gap-2 rounded-2xl border border-white/[0.10] bg-slate-950/60 p-2 shadow-xl backdrop-blur-xl">
@@ -205,9 +702,12 @@ export function HomeView({
               <input
                 type="text"
                 value={message}
-                onChange={(event) =>
+                onChange={(
+                  event
+                ) =>
                   setMessage(
-                    event.target.value
+                    event.target
+                      .value
                   )
                 }
                 placeholder={
@@ -215,7 +715,9 @@ export function HomeView({
                     ? 'Nodysom is thinking...'
                     : 'Ask Nodysom anything...'
                 }
-                disabled={isLoading}
+                disabled={
+                  isLoading
+                }
                 className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
               />
 
@@ -234,46 +736,58 @@ export function HomeView({
                     className="animate-spin"
                   />
                 ) : (
-                  <Send size={17} />
+                  <Send
+                    size={17}
+                  />
                 )}
               </button>
             </div>
           </form>
 
-          {/* QUICK AI PROMPTS */}
+          {/* QUICK PROMPTS */}
+
           <div className="mt-3 flex flex-wrap gap-2">
 
             {[
               'Help me plan my day',
               'Explain something to me',
               'Give me useful ideas',
-            ].map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                disabled={isLoading}
-                onClick={() =>
-                  handleQuickPrompt(
-                    prompt
-                  )
-                }
-                className="rounded-full border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-[10px] font-semibold text-slate-400 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {prompt}
-              </button>
-            ))}
+            ].map(
+              (prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  disabled={
+                    isLoading
+                  }
+                  onClick={() =>
+                    handleQuickPrompt(
+                      prompt
+                    )
+                  }
+                  className="rounded-full border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-[10px] font-semibold text-slate-400 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {prompt}
+                </button>
+              )
+            )}
 
           </div>
 
           {/* MAIN ACTIONS */}
+
           <div className="mt-7 flex flex-wrap gap-3">
 
             <button
               type="button"
-              onClick={onOpenVoice}
+              onClick={
+                onOpenVoice
+              }
               className="nodysom-btn nodysom-btn-primary group"
             >
-              <MessageCircle size={17} />
+              <MessageCircle
+                size={17}
+              />
 
               <span>
                 Start with Nodysom
@@ -288,11 +802,15 @@ export function HomeView({
             <button
               type="button"
               onClick={() =>
-                onNavigate?.('learn')
+                onNavigate?.(
+                  'learn'
+                )
               }
               className="nodysom-btn nodysom-btn-secondary"
             >
-              <BookOpen size={16} />
+              <BookOpen
+                size={16}
+              />
 
               Explore Learning
             </button>
@@ -301,103 +819,220 @@ export function HomeView({
         </div>
       </section>
 
-      {/* RECENT AI CONVERSATION */}
-      {recentMessages.length > 0 && (
+      {/* =================================================
+          AI CONVERSATION
+          ================================================= */}
+
+      {(recentMessages.length >
+        0 ||
+        isLoading) && (
         <section className="mt-7">
 
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex items-end justify-between">
 
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-400">
-                Recent activity
+                AI conversation
               </p>
 
               <h3 className="mt-1 nodysom-section-title">
-                Continue with Nodysom
+                Your conversation
+                with Nodysom
               </h3>
             </div>
 
-            <button
-              type="button"
-              onClick={() =>
-                handleQuickPrompt(
-                  'Continue our conversation and help me with my next step.'
-                )
-              }
-              disabled={isLoading}
-              className="text-[10px] font-bold text-indigo-300 transition hover:text-white disabled:opacity-40"
-            >
-              Continue
-            </button>
+            <span className="rounded-full border border-indigo-400/15 bg-indigo-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-indigo-300">
+              {isLoading
+                ? 'Thinking'
+                : 'Ready'}
+            </span>
 
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
 
             {recentMessages.map(
-              (item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() =>
-                    item.role ===
-                    'user'
-                      ? handleQuickPrompt(
-                          item.content
-                        )
-                      : undefined
-                  }
-                  className={`w-full rounded-2xl border p-4 text-left transition ${
-                    item.role ===
-                    'user'
-                      ? 'border-indigo-400/10 bg-indigo-500/[0.06] hover:bg-indigo-500/[0.10]'
-                      : 'border-white/[0.06] bg-white/[0.025]'
-                  }`}
-                >
+              (item) => {
+                const isUser =
+                  item.role ===
+                  'user';
 
-                  <div className="flex items-start gap-3">
+                return (
+                  <div
+                    key={item.id}
+                    className={
+                      isUser
+                        ? 'flex justify-end'
+                        : 'flex justify-start'
+                    }
+                  >
 
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.05]">
-                      {item.role ===
-                      'user' ? (
-                        <MessageCircle
-                          size={14}
-                          className="text-indigo-300"
-                        />
-                      ) : (
-                        <Sparkles
-                          size={14}
-                          className="text-violet-300"
-                        />
-                      )}
+                    <div
+                      className={
+                        isUser
+                          ? 'w-[92%] max-w-2xl rounded-[22px] rounded-br-md border border-indigo-400/15 bg-indigo-500/[0.10] px-4 py-3.5 sm:w-[82%]'
+                          : 'w-full max-w-3xl rounded-[24px] border border-white/[0.08] bg-white/[0.035] p-4 shadow-lg shadow-black/10 sm:p-5'
+                      }
+                    >
+
+                      <div className="flex items-start gap-3">
+
+                        {/* AVATAR */}
+
+                        <div
+                          className={
+                            isUser
+                              ? 'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-300'
+                              : 'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 text-indigo-300 ring-1 ring-indigo-400/10'
+                          }
+                        >
+                          {isUser ? (
+                            <MessageCircle
+                              size={14}
+                            />
+                          ) : (
+                            <Sparkles
+                              size={14}
+                            />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+
+                          {/* HEADER */}
+
+                          <div className="flex items-center justify-between gap-3">
+
+                            <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                              {isUser
+                                ? 'You'
+                                : 'Nodysom AI'}
+                            </p>
+
+                            {!isUser && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopy(
+                                    item
+                                  )
+                                }
+                                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.025] px-2 py-1 text-[9px] font-semibold text-slate-500 transition hover:border-indigo-400/20 hover:bg-indigo-500/10 hover:text-indigo-300"
+                                aria-label="Copy AI response"
+                              >
+                                {copiedMessageId ===
+                                item.id ? (
+                                  <>
+                                    <Check
+                                      size={
+                                        11
+                                      }
+                                    />
+
+                                    Copied
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy
+                                      size={
+                                        11
+                                      }
+                                    />
+
+                                    Copy
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                          </div>
+
+                          {/* MESSAGE */}
+
+                          {isUser ? (
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-indigo-50">
+                              {
+                                item.content
+                              }
+                            </p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {renderAssistantContent(
+                                item.content
+                              )}
+                            </div>
+                          )}
+
+                          {/* TIME */}
+
+                          <p className="mt-3 text-[9px] font-medium text-slate-600">
+                            {
+                              item.timestamp
+                            }
+                          </p>
+
+                        </div>
+
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+            )}
+
+            {/* THINKING */}
+
+            {isLoading && (
+              <div className="flex justify-start">
+
+                <div className="w-full max-w-3xl rounded-[24px] border border-indigo-400/10 bg-indigo-500/[0.045] p-4 sm:p-5">
+
+                  <div className="flex items-center gap-3">
+
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-300">
+                      <Sparkles
+                        size={14}
+                        className="animate-pulse"
+                      />
                     </div>
 
-                    <div className="min-w-0 flex-1">
+                    <div>
 
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
-                        {item.role ===
-                        'user'
-                          ? 'You'
-                          : 'Nodysom AI'}
+                      <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-indigo-300">
+                        Nodysom AI
                       </p>
 
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
-                        {item.content}
-                      </p>
+                      <div className="mt-2 flex items-center gap-1.5">
+
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400" />
+
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:120ms]" />
+
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-fuchsia-400 [animation-delay:240ms]" />
+
+                        <span className="ml-1 text-[11px] text-slate-500">
+                          Thinking...
+                        </span>
+
+                      </div>
 
                     </div>
 
                   </div>
 
-                </button>
-              )
+                </div>
+
+              </div>
             )}
 
           </div>
         </section>
       )}
 
-      {/* QUICK ACTIONS */}
+      {/* =================================================
+          QUICK ACTIONS
+          ================================================= */}
+
       <section className="mt-7">
 
         <div className="mb-4 flex items-end justify-between">
@@ -408,7 +1043,8 @@ export function HomeView({
             </p>
 
             <h3 className="mt-1 nodysom-section-title">
-              What do you want to do?
+              What do you want
+              to do?
             </h3>
           </div>
 
@@ -416,57 +1052,72 @@ export function HomeView({
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 
-          {actions.map((item) => {
-            const Icon =
-              item.icon;
+          {actions.map(
+            (item) => {
+              const Icon =
+                item.icon;
 
-            return (
-              <button
-                key={item.title}
-                type="button"
-                onClick={item.action}
-                className={`group relative overflow-hidden rounded-2xl border p-4 text-left transition-all duration-200 active:scale-[0.98] ${
-                  item.primary
-                    ? 'border-indigo-400/20 bg-indigo-500/[0.10] hover:border-indigo-400/35 hover:bg-indigo-500/[0.15]'
-                    : 'border-white/[0.07] bg-white/[0.035] hover:border-white/[0.13] hover:bg-white/[0.06]'
-                }`}
-              >
+              return (
+                <button
+                  key={
+                    item.title
+                  }
+                  type="button"
+                  onClick={
+                    item.action
+                  }
+                  className={`group relative overflow-hidden rounded-2xl border p-4 text-left transition-all duration-200 active:scale-[0.98] ${
+                    item.primary
+                      ? 'border-indigo-400/20 bg-indigo-500/[0.10] hover:border-indigo-400/35 hover:bg-indigo-500/[0.15]'
+                      : 'border-white/[0.07] bg-white/[0.035] hover:border-white/[0.13] hover:bg-white/[0.06]'
+                  }`}
+                >
 
-                <div className="mb-5 flex items-center justify-between">
+                  <div className="mb-5 flex items-center justify-between">
 
-                  <span
-                    className={`flex h-10 w-10 items-center justify-center rounded-xl ${
-                      item.primary
-                        ? 'bg-indigo-500/20 text-indigo-300'
-                        : 'bg-white/[0.06] text-slate-300'
-                    }`}
-                  >
-                    <Icon size={18} />
-                  </span>
+                    <span
+                      className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+                        item.primary
+                          ? 'bg-indigo-500/20 text-indigo-300'
+                          : 'bg-white/[0.06] text-slate-300'
+                      }`}
+                    >
+                      <Icon
+                        size={18}
+                      />
+                    </span>
 
-                  <ArrowRight
-                    size={15}
-                    className="text-slate-600 transition-all duration-200 group-hover:translate-x-1 group-hover:text-indigo-300"
-                  />
+                    <ArrowRight
+                      size={15}
+                      className="text-slate-600 transition-all duration-200 group-hover:translate-x-1 group-hover:text-indigo-300"
+                    />
 
-                </div>
+                  </div>
 
-                <h4 className="text-sm font-bold text-white">
-                  {item.title}
-                </h4>
+                  <h4 className="text-sm font-bold text-white">
+                    {
+                      item.title
+                    }
+                  </h4>
 
-                <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                  {item.description}
-                </p>
+                  <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                    {
+                      item.description
+                    }
+                  </p>
 
-              </button>
-            );
-          })}
+                </button>
+              );
+            }
+          )}
 
         </div>
       </section>
 
-      {/* DAILY FOCUS */}
+      {/* =================================================
+          DAILY FOCUS
+          ================================================= */}
+
       <section className="mt-7 grid gap-4 lg:grid-cols-3">
 
         <div className="nodysom-card p-5 lg:col-span-2">
@@ -476,7 +1127,9 @@ export function HomeView({
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-300">
-                <Target size={20} />
+                <Target
+                  size={20}
+                />
               </div>
 
               <div>
@@ -485,7 +1138,8 @@ export function HomeView({
                 </p>
 
                 <h3 className="mt-1 text-base font-extrabold text-white">
-                  Make today productive
+                  Make today
+                  productive
                 </h3>
               </div>
 
@@ -530,7 +1184,9 @@ export function HomeView({
                           : 'text-slate-300'
                       }`}
                     >
-                      {task.title}
+                      {
+                        task.title
+                      }
                     </span>
 
                   </button>
@@ -542,15 +1198,20 @@ export function HomeView({
                 'Complete one important task',
                 'Spend time learning something new',
               ].map(
-                (task, index) => (
+                (
+                  task,
+                  index
+                ) => (
                   <div
                     key={task}
                     className="flex items-center gap-3 rounded-xl border border-white/[0.05] bg-white/[0.025] px-3 py-3"
                   >
+
                     <CheckCircle2
                       size={17}
                       className={
-                        index === 0
+                        index ===
+                        0
                           ? 'text-emerald-400'
                           : 'text-slate-600'
                       }
@@ -570,17 +1231,23 @@ export function HomeView({
           <button
             type="button"
             onClick={() =>
-              onNavigate?.('planner')
+              onNavigate?.(
+                'planner'
+              )
             }
             className="mt-5 flex items-center gap-2 text-[11px] font-bold text-indigo-300 transition hover:text-white"
           >
             Open Planner
-            <ArrowRight size={14} />
+
+            <ArrowRight
+              size={14}
+            />
           </button>
 
         </div>
 
         {/* AI STATUS */}
+
         <div className="relative overflow-hidden rounded-[22px] border border-indigo-400/15 bg-indigo-500/[0.07] p-5">
 
           <div className="absolute -right-12 -top-12 h-32 w-32 rounded-full bg-indigo-500/15 blur-3xl" />
@@ -605,9 +1272,9 @@ export function HomeView({
             </h3>
 
             <p className="mt-2 text-xs leading-5 text-slate-400">
-              Ask anything, get help with
-              your plans, or continue
-              learning.
+              Ask anything, get
+              help with your plans,
+              or continue learning.
             </p>
 
             <button
@@ -615,7 +1282,9 @@ export function HomeView({
               onClick={
                 onOpenVoice
               }
-              disabled={isLoading}
+              disabled={
+                isLoading
+              }
               className="mt-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-indigo-400/20 bg-indigo-500/10 text-xs font-bold text-indigo-200 transition-all hover:bg-indigo-500/20 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <MessageCircle
@@ -630,12 +1299,16 @@ export function HomeView({
 
       </section>
 
-      {/* FOOTER STATUS */}
+      {/* =================================================
+          FOOTER STATUS
+          ================================================= */}
+
       <div className="mt-7 flex items-center justify-center gap-2 text-[10px] font-medium text-slate-600">
 
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
 
-        Nodysom AI is ready to assist you
+        Nodysom AI is ready
+        to assist you
 
       </div>
 
