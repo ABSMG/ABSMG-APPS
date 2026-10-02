@@ -41,18 +41,23 @@ import { SearchView } from './components/SearchView';
 import { PlannerView } from './components/PlannerView';
 import { LearnView } from './components/LearnView';
 import { ProfileView } from './components/ProfileView';
+
 import {
   VoiceAssistantModal,
 } from './components/VoiceAssistantModal';
+
 import {
   TranslatorModal,
 } from './components/TranslatorModal';
+
 import {
   SmartActionModal,
 } from './components/SmartActionModal';
+
 import {
   OnboardingModal,
 } from './components/OnboardingModal';
+
 
 const AI_TIMEOUT_MS = 120000;
 
@@ -68,6 +73,145 @@ const CLOUD_SYNC_DELAY = 1200;
 
 const ONBOARDING_KEY =
   'lifeos_onboarding_completed';
+
+
+// =========================================================
+// SAFE MERGE HELPERS
+// =========================================================
+
+/**
+ * Generic merge for records that have an id.
+ *
+ * Cloud and local records are combined instead of allowing
+ * one source to completely replace the other.
+ *
+ * Cloud values are applied first, then local values are
+ * applied so the local cache is not accidentally lost.
+ */
+function mergeById<T extends { id: string }>(
+  cloudItems: T[],
+  localItems: T[],
+): T[] {
+  const map = new Map<string, T>();
+
+  for (const item of cloudItems) {
+    if (item?.id) {
+      map.set(item.id, item);
+    }
+  }
+
+  for (const item of localItems) {
+    if (item?.id) {
+      map.set(item.id, item);
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+
+/**
+ * Convert chat timestamp into a sortable value.
+ *
+ * Chat timestamps can be either ISO strings or display
+ * strings such as "18:03".
+ */
+function chatOrderValue(
+  message: ChatMessage,
+  fallback: number,
+): number {
+  const raw =
+    String(message?.timestamp || '').trim();
+
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed =
+    Date.parse(raw);
+
+  if (!Number.isNaN(parsed)) {
+    return parsed;
+  }
+
+  const match =
+    raw.match(
+      /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i
+    );
+
+  if (match) {
+    let hours =
+      Number(match[1]);
+
+    const minutes =
+      Number(match[2]);
+
+    const seconds =
+      Number(match[3] || 0);
+
+    const meridiem =
+      match[4]?.toUpperCase();
+
+    if (meridiem === 'PM' && hours < 12) {
+      hours += 12;
+    }
+
+    if (meridiem === 'AM' && hours === 12) {
+      hours = 0;
+    }
+
+    return (
+      hours * 60 * 60 * 1000 +
+      minutes * 60 * 1000 +
+      seconds * 1000
+    );
+  }
+
+  return fallback;
+}
+
+
+/**
+ * Merge chat history safely.
+ *
+ * Important:
+ * - Existing local messages are preserved.
+ * - Existing cloud messages are preserved.
+ * - Duplicate IDs are removed.
+ * - Newer local/cloud messages are retained.
+ * - Result is limited to the same 200-message limit used
+ *   by Storage.
+ */
+function mergeChatHistory(
+  cloudChat: ChatMessage[],
+  localChat: ChatMessage[],
+): ChatMessage[] {
+  const map = new Map<string, ChatMessage>();
+
+  for (const message of cloudChat) {
+    if (message?.id) {
+      map.set(message.id, message);
+    }
+  }
+
+  for (const message of localChat) {
+    if (message?.id) {
+      map.set(message.id, message);
+    }
+  }
+
+  const merged =
+    Array.from(map.values());
+
+  return merged
+    .sort(
+      (a, b) =>
+        chatOrderValue(a, 0) -
+        chatOrderValue(b, 0)
+    )
+    .slice(-200);
+}
+
 
 export default function App() {
   // =========================================================
@@ -135,6 +279,7 @@ export default function App() {
       }
     });
 
+
   // =========================================================
   // SUPABASE STATE
   // =========================================================
@@ -149,29 +294,26 @@ export default function App() {
     useState(false);
 
   /**
-   * IMPORTANT:
-   *
-   * cloudReady becomes true ONLY after cloud data has
-   * successfully been loaded or initialized.
-   *
-   * Automatic sync is blocked until this happens.
+   * cloudReady becomes true only after cloud hydration
+   * has completed successfully.
    */
   const [cloudReady, setCloudReady] =
     useState(false);
 
+
   /**
-   * Prevents an old/slow cloud login request from applying
-   * data after another login/logout has already happened.
+   * Protects against stale asynchronous cloud requests.
    */
   const cloudRequestId =
     useRef(0);
 
+
   /**
-   * Prevents automatic sync from accidentally overwriting
-   * cloud data while hydration is still happening.
+   * Prevents automatic sync before hydration.
    */
   const cloudHydrated =
     useRef(false);
+
 
   /**
    * Prevents duplicate cloud saves.
@@ -179,11 +321,37 @@ export default function App() {
   const cloudSyncTimer =
     useRef<number | null>(null);
 
+
   /**
-   * Prevents state updates after component unmount.
+   * Prevents state updates after unmount.
    */
   const mountedRef =
     useRef(true);
+
+
+  /**
+   * Keeps the latest local state available to the stable
+   * cloud-login callback without recreating the callback
+   * every time state changes.
+   */
+  const latestDataRef =
+    useRef({
+      user,
+      memories,
+      plannerItems,
+      habits,
+      chatHistory,
+    });
+
+
+  latestDataRef.current = {
+    user,
+    memories,
+    plannerItems,
+    habits,
+    chatHistory,
+  };
+
 
   // =========================================================
   // MOUNT / UNMOUNT
@@ -204,6 +372,7 @@ export default function App() {
       }
     };
   }, []);
+
 
   // =========================================================
   // ONLINE / OFFLINE
@@ -241,8 +410,9 @@ export default function App() {
     };
   }, []);
 
+
   // =========================================================
-  // CLOUD LOGIN / HYDRATION
+  // CLOUD LOGIN / SAFE HYDRATION
   // =========================================================
 
   const handleCloudLogin =
@@ -263,13 +433,9 @@ export default function App() {
 
         setCloudReady(false);
 
-        setCloudUserId(
-          userId
-        );
+        setCloudUserId(userId);
 
-        setCloudEmail(
-          email
-        );
+        setCloudEmail(email);
 
         setCloudBusy(true);
 
@@ -280,8 +446,7 @@ export default function App() {
             );
 
           /**
-           * Ignore this response if another auth action
-           * happened while the request was running.
+           * Ignore stale cloud responses.
            */
           if (
             requestId !==
@@ -294,47 +459,116 @@ export default function App() {
             return;
           }
 
-          // ---------------------------------------------------
+
+          // ===================================================
           // EXISTING CLOUD ACCOUNT
-          // ---------------------------------------------------
+          // ===================================================
 
           if (cloudData) {
-            const restoredUser =
+            const localData =
+              latestDataRef.current;
+
+
+            const cloudUser =
               cloudData.user;
 
-            const restoredMemories =
+            const cloudMemories =
               Array.isArray(
                 cloudData.memories
               )
                 ? cloudData.memories
                 : [];
 
-            const restoredPlanner =
+            const cloudPlanner =
               Array.isArray(
                 cloudData.plannerItems
               )
                 ? cloudData.plannerItems
                 : [];
 
-            const restoredHabits =
+            const cloudHabits =
               Array.isArray(
                 cloudData.habits
               )
                 ? cloudData.habits
                 : [];
 
-            const restoredChat =
+            const cloudChat =
               Array.isArray(
                 cloudData.chatHistory
               )
                 ? cloudData.chatHistory
                 : [];
 
+
             /**
-             * CLOUD IS THE SOURCE OF TRUTH AFTER LOGIN.
+             * IMPORTANT:
              *
-             * Restore every data category together.
+             * We no longer treat cloud as the only source
+             * of truth.
+             *
+             * Local + cloud are merged.
              */
+
+
+            // -------------------------------------------------
+            // USER
+            // -------------------------------------------------
+
+            const restoredUser: UserProfile = {
+              ...localData.user,
+              ...(cloudUser || {}),
+            };
+
+
+            // -------------------------------------------------
+            // MEMORIES
+            // -------------------------------------------------
+
+            const restoredMemories =
+              mergeById(
+                cloudMemories,
+                localData.memories
+              );
+
+
+            // -------------------------------------------------
+            // PLANNER
+            // -------------------------------------------------
+
+            const restoredPlanner =
+              mergeById(
+                cloudPlanner,
+                localData.plannerItems
+              );
+
+
+            // -------------------------------------------------
+            // HABITS
+            // -------------------------------------------------
+
+            const restoredHabits =
+              mergeById(
+                cloudHabits,
+                localData.habits
+              );
+
+
+            // -------------------------------------------------
+            // CHAT
+            // -------------------------------------------------
+
+            const restoredChat =
+              mergeChatHistory(
+                cloudChat,
+                localData.chatHistory
+              );
+
+
+            // =================================================
+            // APPLY MERGED DATA
+            // =================================================
+
             setUser(
               restoredUser
             );
@@ -355,9 +589,11 @@ export default function App() {
               restoredChat
             );
 
-            /**
-             * Also update local cache.
-             */
+
+            // =================================================
+            // UPDATE LOCAL CACHE
+            // =================================================
+
             Storage.saveUser(
               restoredUser
             );
@@ -378,10 +614,51 @@ export default function App() {
               restoredChat
             );
 
+
+            // =================================================
+            // WRITE MERGED DATA BACK TO CLOUD
+            // =================================================
+
             /**
-             * Mark hydration complete only AFTER every
-             * cloud value has been applied.
+             * This is important.
+             *
+             * If the local device had messages that were
+             * missing from the cloud, those messages are now
+             * uploaded instead of being deleted.
              */
+            await saveCloudData(
+              userId,
+              {
+                user:
+                  restoredUser,
+
+                memories:
+                  restoredMemories,
+
+                plannerItems:
+                  restoredPlanner,
+
+                habits:
+                  restoredHabits,
+
+                chatHistory:
+                  restoredChat,
+              }
+            );
+
+
+            if (
+              requestId !==
+              cloudRequestId.current
+            ) {
+              return;
+            }
+
+            if (!mountedRef.current) {
+              return;
+            }
+
+
             cloudHydrated.current =
               true;
 
@@ -392,28 +669,43 @@ export default function App() {
             return;
           }
 
-          // ---------------------------------------------------
+
+          // ===================================================
           // NEW CLOUD ACCOUNT
-          // ---------------------------------------------------
+          // ===================================================
 
           /**
-           * No cloud record exists yet.
+           * No cloud record exists.
            *
-           * The current local data becomes the initial
-           * cloud backup.
+           * Current local data becomes the initial cloud
+           * backup.
            */
+          const localData =
+            latestDataRef.current;
+
           const initialCloudData = {
-            user,
-            memories,
-            plannerItems,
-            habits,
-            chatHistory,
+            user:
+              localData.user,
+
+            memories:
+              localData.memories,
+
+            plannerItems:
+              localData.plannerItems,
+
+            habits:
+              localData.habits,
+
+            chatHistory:
+              localData.chatHistory,
           };
+
 
           await saveCloudData(
             userId,
             initialCloudData
           );
+
 
           if (
             requestId !==
@@ -425,6 +717,7 @@ export default function App() {
           if (!mountedRef.current) {
             return;
           }
+
 
           cloudHydrated.current =
             true;
@@ -442,6 +735,9 @@ export default function App() {
             requestId ===
             cloudRequestId.current
           ) {
+            /**
+             * Keep local data intact when cloud fails.
+             */
             cloudHydrated.current =
               false;
 
@@ -461,14 +757,9 @@ export default function App() {
           }
         }
       },
-      [
-        user,
-        memories,
-        plannerItems,
-        habits,
-        chatHistory,
-      ]
+      []
     );
+
 
   // =========================================================
   // INITIAL SUPABASE SESSION
@@ -541,11 +832,14 @@ export default function App() {
         }
       };
 
+
     loadSession();
+
 
     let unsubscribe:
       | (() => void)
       | undefined;
+
 
     if (supabase) {
       const {
@@ -589,10 +883,12 @@ export default function App() {
           }
         );
 
+
       unsubscribe = () => {
         subscription.unsubscribe();
       };
     }
+
 
     return () => {
       active = false;
@@ -603,16 +899,14 @@ export default function App() {
     handleCloudLogin,
   ]);
 
+
   // =========================================================
   // AUTOMATIC CLOUD SYNC
   // =========================================================
 
   useEffect(() => {
     /**
-     * NEVER sync before hydration.
-     *
-     * This is the most important protection against
-     * localStorage overwriting cloud chat history.
+     * NEVER sync before cloud hydration.
      */
     if (
       !cloudUserId ||
@@ -623,6 +917,7 @@ export default function App() {
       return;
     }
 
+
     if (
       cloudSyncTimer.current !== null
     ) {
@@ -631,11 +926,12 @@ export default function App() {
       );
     }
 
+
     cloudSyncTimer.current =
       window.setTimeout(
         async () => {
           /**
-           * Check again immediately before writing.
+           * Re-check immediately before writing.
            */
           if (
             !cloudUserId ||
@@ -644,6 +940,7 @@ export default function App() {
           ) {
             return;
           }
+
 
           try {
             await saveCloudData(
@@ -666,6 +963,7 @@ export default function App() {
         CLOUD_SYNC_DELAY
       );
 
+
     return () => {
       if (
         cloudSyncTimer.current !==
@@ -685,6 +983,7 @@ export default function App() {
     habits,
     chatHistory,
   ]);
+
 
   // =========================================================
   // AUTH ACTIONS
@@ -707,9 +1006,11 @@ export default function App() {
             password
           );
 
+
         if (error) {
           throw error;
         }
+
 
         if (!data.user) {
           throw new Error(
@@ -717,14 +1018,16 @@ export default function App() {
           );
         }
 
+
         /**
-         * Explicitly hydrate before reporting success.
+         * Explicit hydration.
          */
         await handleCloudLogin(
           data.user.id,
           data.user.email ||
             email
         );
+
 
         return {
           success: true,
@@ -750,6 +1053,7 @@ export default function App() {
       }
     };
 
+
   const handleCloudSignUp =
     async (
       email: string,
@@ -767,9 +1071,11 @@ export default function App() {
             password
           );
 
+
         if (error) {
           throw error;
         }
+
 
         if (
           data.session?.user
@@ -780,12 +1086,14 @@ export default function App() {
               email
           );
 
+
           return {
             success: true,
             message:
               'Account created successfully. Your data is now backed up.',
           };
         }
+
 
         return {
           success: true,
@@ -811,15 +1119,20 @@ export default function App() {
       }
     };
 
+
   const handleCloudSignOut =
     async () => {
       setCloudBusy(true);
 
       try {
+        /**
+         * Invalidate all pending cloud operations.
+         */
         cloudRequestId.current++;
 
         cloudHydrated.current =
           false;
+
 
         if (
           cloudSyncTimer.current !==
@@ -830,7 +1143,9 @@ export default function App() {
           );
         }
 
+
         await signOut();
+
 
         setCloudUserId(
           null
@@ -843,6 +1158,15 @@ export default function App() {
         setCloudReady(
           false
         );
+
+        /**
+         * IMPORTANT:
+         *
+         * Local chat/history is intentionally NOT cleared.
+         *
+         * This means logging out does not destroy the
+         * user's local data.
+         */
       } catch (error) {
         console.error(
           'Sign out error:',
@@ -854,6 +1178,7 @@ export default function App() {
         );
       }
     };
+
 
   // =========================================================
   // USER
@@ -868,14 +1193,17 @@ export default function App() {
         ...updated,
       };
 
+
       setUser(
         nextUser
       );
+
 
       Storage.saveUser(
         nextUser
       );
     };
+
 
   // =========================================================
   // PLANNER
@@ -897,14 +1225,17 @@ export default function App() {
               : item
         );
 
+
       setPlannerItems(
         updated
       );
+
 
       Storage.savePlannerItems(
         updated
       );
     };
+
 
   const handleAddTask =
     (
@@ -916,12 +1247,14 @@ export default function App() {
       const category =
         item.category?.trim();
 
+
       let tags =
         (item.tags || [])
           .map((tag) =>
             tag.trim()
           )
           .filter(Boolean);
+
 
       if (
         category &&
@@ -935,9 +1268,11 @@ export default function App() {
         ];
       }
 
+
       tags = Array.from(
         new Set(tags)
       );
+
 
       const newItem:
         PlannerItem = {
@@ -951,19 +1286,23 @@ export default function App() {
         tags,
       };
 
+
       const updated = [
         newItem,
         ...plannerItems,
       ];
 
+
       setPlannerItems(
         updated
       );
+
 
       Storage.savePlannerItems(
         updated
       );
     };
+
 
   // =========================================================
   // HABITS
@@ -982,13 +1321,16 @@ export default function App() {
               return habit;
             }
 
+
             const nextState =
               !habit.completedToday;
+
 
             return {
               ...habit,
               completedToday:
                 nextState,
+
               streak:
                 nextState
                   ? habit.streak +
@@ -1002,14 +1344,17 @@ export default function App() {
           }
         );
 
+
       setHabits(
         updated
       );
+
 
       Storage.saveHabits(
         updated
       );
     };
+
 
   // =========================================================
   // MEMORY
@@ -1023,38 +1368,47 @@ export default function App() {
       const cleanContent =
         content.trim();
 
+
       if (
         !cleanContent
       ) {
         return;
       }
 
+
       const newMemory:
         MemoryItem = {
         id:
           `mem_${Date.now()}`,
+
         content:
           cleanContent,
+
         category,
+
         createdAt:
           new Date()
             .toISOString()
             .split('T')[0],
       };
 
+
       const updated = [
         newMemory,
         ...memories,
       ];
 
+
       setMemories(
         updated
       );
+
 
       Storage.saveMemories(
         updated
       );
     };
+
 
   const handleDeleteMemory =
     (
@@ -1066,14 +1420,17 @@ export default function App() {
             memory.id !== id
         );
 
+
       setMemories(
         updated
       );
+
 
       Storage.saveMemories(
         updated
       );
     };
+
 
   // =========================================================
   // AI AGENT
@@ -1086,6 +1443,7 @@ export default function App() {
       const cleanText =
         text.trim();
 
+
       if (
         !cleanText ||
         isLoadingAI
@@ -1093,51 +1451,63 @@ export default function App() {
         return;
       }
 
+
       const now =
         Date.now();
+
 
       const userMsg:
         ChatMessage = {
         id:
           `msg_u_${now}`,
+
         role:
           'user',
+
         content:
           cleanText,
+
         timestamp:
           new Date().toLocaleTimeString(
             [],
             {
               hour:
                 '2-digit',
+
               minute:
                 '2-digit',
             }
           ),
       };
 
+
       const nextHistory = [
         ...chatHistory,
         userMsg,
       ];
 
+
       setChatHistory(
         nextHistory
       );
 
+
       /**
-       * Local cache is updated immediately.
+       * Save locally immediately.
        */
       Storage.saveChatHistory(
         nextHistory
       );
 
+
       setIsLoadingAI(
         true
       );
 
+
       const controller =
         new AbortController();
+
 
       const timeoutId =
         window.setTimeout(
@@ -1146,6 +1516,7 @@ export default function App() {
           },
           AI_TIMEOUT_MS
         );
+
 
       try {
         const recentHistory =
@@ -1157,6 +1528,7 @@ export default function App() {
               (message) => ({
                 role:
                   message.role,
+
                 content:
                   String(
                     message.content ||
@@ -1167,6 +1539,7 @@ export default function App() {
                   ),
               })
             );
+
 
         const recentMemories =
           memories
@@ -1187,6 +1560,7 @@ export default function App() {
               })
             );
 
+
         const safeProfile = {
           name:
             user?.name ||
@@ -1205,6 +1579,7 @@ export default function App() {
               500
             ),
         };
+
 
         const response =
           await fetch(
@@ -1241,13 +1616,16 @@ export default function App() {
             }
           );
 
+
         if (!response.ok) {
           let serverMessage =
             'AI Agent request failed.';
 
+
           try {
             const errorData =
               await response.json();
+
 
             serverMessage =
               errorData?.error ||
@@ -1257,13 +1635,16 @@ export default function App() {
             // Ignore invalid JSON.
           }
 
+
           throw new Error(
             serverMessage
           );
         }
 
+
         const data =
           await response.json();
+
 
         const agentReply =
           typeof data.reply ===
@@ -1271,6 +1652,7 @@ export default function App() {
           data.reply.trim()
             ? data.reply.trim()
             : 'I processed your request.';
+
 
         const assistantMsg:
           ChatMessage = {
@@ -1289,6 +1671,7 @@ export default function App() {
               {
                 hour:
                   '2-digit',
+
                 minute:
                   '2-digit',
               }
@@ -1299,18 +1682,22 @@ export default function App() {
             null,
         };
 
+
         const finalHistory = [
           ...nextHistory,
           assistantMsg,
         ];
 
+
         setChatHistory(
           finalHistory
         );
 
+
         Storage.saveChatHistory(
           finalHistory
         );
+
 
         if (
           data.newMemory &&
@@ -1324,6 +1711,7 @@ export default function App() {
           );
         }
 
+
         if (
           data.detectedAction
         ) {
@@ -1331,6 +1719,7 @@ export default function App() {
             data.detectedAction
           );
         }
+
 
         if (
           data.usedTool &&
@@ -1340,6 +1729,7 @@ export default function App() {
             'Agent tool used:',
             data.tool
           );
+
 
           if (
             data.toolResult
@@ -1358,8 +1748,10 @@ export default function App() {
           error
         );
 
+
         let errorText =
           'Nodysom AI is temporarily unavailable. Please try again.';
+
 
         if (
           error?.name ===
@@ -1379,6 +1771,7 @@ export default function App() {
             error.message;
         }
 
+
         const errorMsg:
           ChatMessage = {
           id:
@@ -1396,20 +1789,24 @@ export default function App() {
               {
                 hour:
                   '2-digit',
+
                 minute:
                   '2-digit',
               }
             ),
         };
 
+
         const errorHistory = [
           ...nextHistory,
           errorMsg,
         ];
 
+
         setChatHistory(
           errorHistory
         );
+
 
         Storage.saveChatHistory(
           errorHistory
@@ -1419,11 +1816,13 @@ export default function App() {
           timeoutId
         );
 
+
         setIsLoadingAI(
           false
         );
       }
     };
+
 
   // =========================================================
   // SMART ACTION
@@ -1436,6 +1835,7 @@ export default function App() {
       const category =
         finalAction.category ||
         'General';
+
 
       const newItem:
         PlannerItem = {
@@ -1474,22 +1874,27 @@ export default function App() {
         ],
       };
 
+
       const updated = [
         newItem,
         ...plannerItems,
       ];
 
+
       setPlannerItems(
         updated
       );
+
 
       Storage.savePlannerItems(
         updated
       );
 
+
       setPendingAction(
         null
       );
+
 
       const confirmMsg:
         ChatMessage = {
@@ -1513,31 +1918,37 @@ export default function App() {
             '09:00 AM'
           }.`,
 
+
         timestamp:
           new Date().toLocaleTimeString(
             [],
             {
               hour:
                 '2-digit',
+
               minute:
                 '2-digit',
             }
           ),
       };
 
+
       const finalHistory = [
         ...chatHistory,
         confirmMsg,
       ];
 
+
       setChatHistory(
         finalHistory
       );
+
 
       Storage.saveChatHistory(
         finalHistory
       );
     };
+
 
   // =========================================================
   // ONBOARDING
@@ -1553,6 +1964,7 @@ export default function App() {
         updatedProfile
       );
 
+
       try {
         localStorage.setItem(
           ONBOARDING_KEY,
@@ -1562,9 +1974,11 @@ export default function App() {
         // Ignore storage errors.
       }
 
+
       setIsOnboardingOpen(
         false
       );
+
 
       if (
         initialPrompt
@@ -1575,6 +1989,7 @@ export default function App() {
       }
     };
 
+
   // =========================================================
   // CLEAR LOCAL DATA
   // =========================================================
@@ -1582,6 +1997,7 @@ export default function App() {
   const handleClearAllData =
     () => {
       Storage.clearAllData();
+
 
       const resetUser =
         Storage.getUser();
@@ -1597,6 +2013,7 @@ export default function App() {
 
       const resetChat =
         Storage.getChatHistory();
+
 
       setUser(
         resetUser
@@ -1619,6 +2036,7 @@ export default function App() {
       );
     };
 
+
   // =========================================================
   // UI
   // =========================================================
@@ -1638,6 +2056,7 @@ export default function App() {
             : 'max-w-2xl min-h-screen relative'
         }`}
       >
+
         {isPhoneFrame && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4 bg-slate-900 rounded-full z-40 flex items-center justify-center">
             <div className="w-10 h-1 bg-slate-800 rounded-full" />
@@ -1646,22 +2065,26 @@ export default function App() {
           </div>
         )}
 
+
         <TopHeader
           user={user}
           isOnline={isOnline}
           isPhoneFrame={
             isPhoneFrame
           }
+
           onTogglePhoneFrame={() =>
             setIsPhoneFrame(
               !isPhoneFrame
             )
           }
+
           onOpenVoice={() =>
             setIsVoiceOpen(
               true
             )
           }
+
           onOpenTranslator={() =>
             setIsTranslatorOpen(
               true
@@ -1669,31 +2092,40 @@ export default function App() {
           }
         />
 
+
         <main className="flex-1 overflow-y-auto">
+
           {currentTab ===
             'home' && (
             <HomeView
               user={user}
+
               chatHistory={
                 chatHistory
               }
+
               plannerItems={
                 plannerItems
               }
+
               onSendMessage={
                 handleSendMessage
               }
+
               isLoading={
                 isLoadingAI
               }
+
               onOpenVoice={() =>
                 setIsVoiceOpen(
                   true
                 )
               }
+
               onToggleTask={
                 handleToggleTask
               }
+
               onSelectAction={(
                 action
               ) =>
@@ -1701,6 +2133,7 @@ export default function App() {
                   action
                 )
               }
+
               onNavigate={(tab) =>
                 setCurrentTab(
                   tab as TabType
@@ -1708,6 +2141,7 @@ export default function App() {
               }
             />
           )}
+
 
           {currentTab ===
             'search' && (
@@ -1723,11 +2157,13 @@ export default function App() {
                   act
                 );
               }}
+
               preferredLanguage={
                 user.preferredLanguage
               }
             />
           )}
+
 
           {currentTab ===
             'learn' && (
@@ -1746,95 +2182,122 @@ export default function App() {
             />
           )}
 
+
           {currentTab ===
             'planner' && (
             <PlannerView
               plannerItems={
                 plannerItems
               }
+
               habits={
                 habits
               }
+
               onToggleTask={
                 handleToggleTask
               }
+
               onAddTask={
                 handleAddTask
               }
+
               onToggleHabit={
                 handleToggleHabit
               }
             />
           )}
 
+
           {currentTab ===
             'profile' && (
             <ProfileView
               user={user}
+
               memories={
                 memories
               }
+
               onUpdateUser={
                 handleUpdateUser
               }
+
               onAddMemory={
                 handleAddMemory
               }
+
               onDeleteMemory={
                 handleDeleteMemory
               }
+
               onExportData={
                 Storage.exportAllDataJSON
               }
+
               onClearAllData={
                 handleClearAllData
               }
+
               cloudEnabled={
                 isSupabaseConfigured
               }
+
               cloudEmail={
                 cloudEmail
               }
+
               cloudBusy={
                 cloudBusy
               }
+
               onSignIn={
                 handleCloudSignIn
               }
+
               onSignUp={
                 handleCloudSignUp
               }
+
               onSignOut={
                 handleCloudSignOut
               }
             />
           )}
+
         </main>
+
 
         <BottomNav
           currentTab={
             currentTab
           }
+
           onSelectTab={(tab) =>
             setCurrentTab(
               tab
             )
           }
+
           onOpenVoice={() =>
             setIsVoiceOpen(
               true
             )
           }
+
           user={user}
+
           isOnline={isOnline}
+
           isPhoneFrame={
             isPhoneFrame
           }
+
           onTogglePhoneFrame={() =>
             setIsPhoneFrame(
               !isPhoneFrame
             )
           }
+
           onOpenTranslator={() =>
             setIsTranslatorOpen(
               true
@@ -1842,15 +2305,18 @@ export default function App() {
           }
         />
 
+
         <VoiceAssistantModal
           isOpen={
             isVoiceOpen
           }
+
           onClose={() =>
             setIsVoiceOpen(
               false
             )
           }
+
           onSubmitVoicePrompt={(
             prompt
           ) => {
@@ -1862,15 +2328,18 @@ export default function App() {
               prompt
             );
           }}
+
           preferredLanguage={
             user.preferredLanguage
           }
         />
 
+
         <TranslatorModal
           isOpen={
             isTranslatorOpen
           }
+
           onClose={() =>
             setIsTranslatorOpen(
               false
@@ -1878,13 +2347,16 @@ export default function App() {
           }
         />
 
+
         <SmartActionModal
           action={
             pendingAction
           }
+
           onConfirm={
             handleConfirmSmartAction
           }
+
           onCancel={() =>
             setPendingAction(
               null
@@ -1892,14 +2364,17 @@ export default function App() {
           }
         />
 
+
         <OnboardingModal
           isOpen={
             isOnboardingOpen
           }
+
           onComplete={
             handleCompleteOnboarding
           }
         />
+
       </div>
     </div>
   );
