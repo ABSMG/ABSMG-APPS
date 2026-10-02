@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://absmg-apps.onrender.com/sitemap.xml
