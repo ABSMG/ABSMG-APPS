@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200"
+     height="630"
+     viewBox="0 0 1200 630">
+
+  <defs>
+    <linearGradient id="background"
+      x1="0" y1="0" x2="1200" y2="630">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="55%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+
+    <linearGradient id="brand"
+      x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#background)"/>
+
+  <!-- Decorative glow -->
+  <circle
+    cx="1050"
+    cy="80"
+    r="180"
+    fill="#6366F1"
+    opacity="0.12"
+  />
+
+  <circle
+    cx="120"
+    cy="560"
+    r="190"
+    fill="#06B6D4"
+    opacity="0.08"
+  />
+
+  <!-- Logo container -->
+  <rect
+    x="90"
+    y="90"
+    width="150"
+    height="150"
+    rx="36"
+    fill="#020617"
+    stroke="#334155"
+    stroke-width="3"
+  />
+
+  <!-- N logo -->
+  <path
+    d="M125 220V140H143L187 190V140H205V220H187L143 170V220H125Z"
+    fill="url(#brand)"
+    filter="url(#glow)"
+  />
+
+  <circle
+    cx="210"
+    cy="135"
+    r="8"
+    fill="#22D3EE"
+  />
+
+  <!-- Brand name -->
+  <text
+    x="275"
+    y="160"
+    fill="#FFFFFF"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="62"
+    font-weight="700">
+    Nodysom AI
+  </text>
+
+  <!-- Tagline -->
+  <text
+    x="275"
+    y="215"
+    fill="#CBD5E1"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="30">
+    Plan Your Day. Live Smarter.
+  </text>
+
+  <!-- Main headline -->
+  <text
+    x="90"
+    y="355"
+    fill="#F8FAFC"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="43"
+    font-weight="600">
+    Your Intelligent Daily Life Assistant
+  </text>
+
+  <!-- Features -->
+  <text
+    x="90"
+    y="415"
+    fill="#94A3B8"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="27">
+    Plan • Learn • Search • Translate • Schedule • Achieve
+  </text>
+
+  <!-- Accent -->
+  <rect
+    x="90"
+    y="490"
+    width="430"
+    height="8"
+    rx="4"
+    fill="url(#brand)"
+  />
+
+  <!-- Footer -->
+  <text
+    x="90"
+    y="550"
+    fill="#64748B"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="22">
+    Nodysom AI
+  </text>
+
+</svg>
