@@ -612,3 +612,84 @@ textarea.nodysom-input {
     padding-top: env(safe-area-inset-top);
   }
 }
+/* ==================================================
+   NODYSOM AI — FINAL DASHBOARD POLISH
+   Preserves all existing features
+================================================== */
+
+.dashboard-surface {
+  width: 100%;
+  min-height: 100%;
+  margin: 0 auto;
+}
+
+.dashboard-content {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+
+  padding-inline: clamp(14px, 2.5vw, 30px);
+  padding-top: clamp(18px, 3vw, 30px);
+
+  padding-bottom:
+    calc(108px + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 1024px) {
+  .dashboard-content {
+    padding-bottom: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  .dashboard-content {
+    padding-inline: 14px;
+  }
+}
+
+@media (min-width: 768px) {
+  .dashboard-content {
+    padding-inline: 24px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .dashboard-content {
+    padding-inline: 30px;
+  }
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgb(129 140 248);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(99, 102, 241, 0.28);
+  color: #eef2ff;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
