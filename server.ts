@@ -33,7 +33,7 @@ const PORT =
 
 /* =========================================================
    AI CONFIGURATION
-   GOOGLE GEMINI + OPENROUTER FALLBACK
+   GOOGLE GEMINI + OPENROUTER + GROQ FALLBACK
 ========================================================= */
 
 /*
@@ -44,9 +44,11 @@ const PORT =
  * Fast timeout / quota detection
  *    ↓
  * OpenRouter fallback
+ *    ↓
+ * Groq fallback
  *
- * This prevents the application from waiting several
- * minutes before switching providers.
+ * This prevents the application from depending on only
+ * one AI provider.
  */
 
 const AI_TIMEOUT_MS = 60000;
@@ -54,6 +56,8 @@ const AI_TIMEOUT_MS = 60000;
 const SEARCH_TIMEOUT_MS = 18000;
 
 const OPENROUTER_TIMEOUT_MS = 60000;
+
+const GROQ_TIMEOUT_MS = 45000;
 
 const GEMINI_COOLDOWN_MS =
   15 * 60 * 1000;
@@ -70,8 +74,17 @@ const OPENROUTER_MODEL =
       "openrouter/free"
   ).trim();
 
+const GROQ_MODEL =
+  String(
+    process.env.GROQ_MODEL ||
+      "openai/gpt-oss-20b"
+  ).trim();
+
 const OPENROUTER_URL =
   "https://openrouter.ai/api/v1/chat/completions";
+
+const GROQ_URL =
+  "https://api.groq.com/openai/v1/chat/completions";
 
 /* =========================================================
    PERFORMANCE SETTINGS
@@ -114,7 +127,7 @@ const SCHEDULE_MAX_TOKENS = 1800;
  * calling it wastes time.
  *
  * Instead, Nodysom temporarily skips Gemini and sends the
- * request directly to OpenRouter.
+ * request directly to OpenRouter, then Groq if needed.
  */
 
 let geminiCooldownUntil = 0;
@@ -161,6 +174,7 @@ app.use(
     limit: "1mb",
   })
 );
+
 /* =========================================================
    SEO FILES
 ========================================================= */
@@ -190,6 +204,7 @@ app.get("/sitemap.xml", (_req, res) => {
 </urlset>`
     );
 });
+
 /* =========================================================
    RATE LIMITING
 ========================================================= */
@@ -268,6 +283,12 @@ function getOpenRouterKey(): string {
   ).trim();
 }
 
+function getGroqKey(): string {
+  return String(
+    process.env.GROQ_API_KEY || ""
+  ).trim();
+}
+
 function isPlaceholderKey(
   apiKey: string
 ): boolean {
@@ -299,10 +320,21 @@ function hasOpenRouterKey(): boolean {
   );
 }
 
+function hasGroqKey(): boolean {
+  const key =
+    getGroqKey();
+
+  return (
+    key.length > 0 &&
+    !isPlaceholderKey(key)
+  );
+}
+
 function hasAIProvider(): boolean {
   return (
     hasGeminiKey() ||
-    hasOpenRouterKey()
+    hasOpenRouterKey() ||
+    hasGroqKey()
   );
 }
 
@@ -406,7 +438,7 @@ async function withTimeout<T>(
  *
  * Promise.race alone does not stop an underlying fetch.
  *
- * AbortController actually cancels the OpenRouter
+ * AbortController actually cancels the OpenRouter/Groq
  * network request when the timeout is reached.
  */
 
@@ -879,6 +911,169 @@ async function callOpenRouter(
 }
 
 /* =========================================================
+   GROQ FALLBACK
+========================================================= */
+
+async function callGroq(
+  messages: ChatMessage[],
+  options?: {
+    json?: boolean;
+    maxTokens?: number;
+    timeoutMs?: number;
+  }
+): Promise<GeminiResponse> {
+  const apiKey =
+    getGroqKey();
+
+  if (!apiKey) {
+    throw new Error(
+      "GROQ_API_KEY is not configured."
+    );
+  }
+
+  if (isPlaceholderKey(apiKey)) {
+    throw new Error(
+      "GROQ_API_KEY is still a placeholder."
+    );
+  }
+
+  const body: Record<string, unknown> = {
+    model:
+      GROQ_MODEL,
+
+    messages:
+      messages.map(
+        (message) => ({
+          role:
+            message.role,
+
+          content:
+            message.content,
+        })
+      ),
+
+    max_tokens:
+      options?.maxTokens ||
+      DEFAULT_MAX_TOKENS,
+  };
+
+  /*
+   * Groq supports OpenAI-compatible JSON response
+   * formatting for supported models.
+   */
+
+  if (options?.json) {
+    body.response_format = {
+      type: "json_object",
+    };
+  }
+
+  const timeoutMs =
+    options?.timeoutMs ||
+    GROQ_TIMEOUT_MS;
+
+  const response =
+    await fetchWithTimeout(
+      GROQ_URL,
+      {
+        method: "POST",
+
+        headers: {
+          Authorization:
+            `Bearer ${apiKey}`,
+
+          "Content-Type":
+            "application/json",
+
+          "X-Title":
+            "Nodysom AI",
+        },
+
+        body:
+          JSON.stringify(body),
+      },
+      timeoutMs
+    );
+
+  const rawBody =
+    await response.text();
+
+  let data: any = null;
+
+  try {
+    data =
+      JSON.parse(rawBody);
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const message =
+      cleanText(
+        data?.error?.message ||
+        data?.message ||
+        rawBody,
+        1500
+      );
+
+    throw new Error(
+      `Groq API error (${response.status}): ${message}`
+    );
+  }
+
+  const content =
+    data?.choices?.[0]?.message?.content;
+
+  let text = "";
+
+  if (typeof content === "string") {
+    text = content;
+  } else if (
+    Array.isArray(content)
+  ) {
+    text =
+      content
+        .map(
+          (item: any) =>
+            typeof item === "string"
+              ? item
+              : item?.text || ""
+        )
+        .join("\n");
+  } else if (
+    content &&
+    typeof content === "object"
+  ) {
+    text =
+      cleanText(
+        (content as any).text ||
+        (content as any).content ||
+        "",
+        30000
+      );
+  }
+
+  text =
+    cleanText(
+      text,
+      30000
+    );
+
+  if (!text) {
+    throw new Error(
+      "Groq returned an empty response."
+    );
+  }
+
+  return {
+    text,
+
+    raw:
+      data,
+  };
+}
+
+/* =========================================================
    UNIFIED AI PROVIDER
 ========================================================= */
 
@@ -892,6 +1087,9 @@ async function callAI(
 ): Promise<GeminiResponse> {
   let geminiError =
     "Gemini is unavailable.";
+
+  let openRouterError =
+    "OpenRouter is unavailable.";
 
   const requestedTimeout =
     options?.timeoutMs ||
@@ -966,7 +1164,7 @@ async function callAI(
 
   /*
    * ================================================
-   * FALLBACK: OPENROUTER
+   * SECOND PROVIDER: OPENROUTER
    * ================================================
    */
 
@@ -988,7 +1186,7 @@ async function callAI(
       );
 
     } catch (error) {
-      const openRouterError =
+      openRouterError =
         error instanceof Error
           ? error.message
           : String(error);
@@ -997,15 +1195,57 @@ async function callAI(
         "[Nodysom AI] OpenRouter fallback failed:",
         openRouterError
       );
+    }
+  } else {
+    openRouterError =
+      "OPENROUTER_API_KEY is not configured.";
+  }
+
+  /*
+   * ================================================
+   * THIRD PROVIDER: GROQ
+   * ================================================
+   *
+   * Groq is used when Gemini and OpenRouter are
+   * unavailable.
+   */
+
+  if (hasGroqKey()) {
+    try {
+      console.log(
+        "[Nodysom AI] Trying Groq fallback..."
+      );
+
+      return await callGroq(
+        messages,
+        {
+          ...options,
+
+          timeoutMs:
+            options?.timeoutMs ||
+            GROQ_TIMEOUT_MS,
+        }
+      );
+
+    } catch (error) {
+      const groqError =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.error(
+        "[Nodysom AI] Groq fallback failed:",
+        groqError
+      );
 
       throw new Error(
-        `AI providers unavailable. Gemini: ${geminiError} OpenRouter: ${openRouterError}`
+        `AI providers unavailable. Gemini: ${geminiError} OpenRouter: ${openRouterError} Groq: ${groqError}`
       );
     }
   }
 
   throw new Error(
-    `No usable AI provider is configured. Gemini: ${geminiError}`
+    `No usable AI provider is configured. Gemini: ${geminiError} OpenRouter: ${openRouterError} Groq: GROQ_API_KEY is not configured.`
   );
 }
 
@@ -1662,6 +1902,42 @@ app.get(
       trimmedOpenRouterKey.length > 0 &&
       !openRouterPlaceholderDetected;
 
+    const rawGroqKey =
+      getGroqKey();
+
+    const trimmedGroqKey =
+      rawGroqKey.trim();
+
+    const groqPlaceholderDetected =
+      isPlaceholderKey(
+        trimmedGroqKey
+      );
+
+    const hasUsableGroqKey =
+      trimmedGroqKey.length > 0 &&
+      !groqPlaceholderDetected;
+
+    let activeProvider =
+      "Not configured";
+
+    if (
+      hasUsableGeminiKey &&
+      !isGeminiCoolingDown()
+    ) {
+      activeProvider =
+        "Google Gemini";
+    } else if (
+      hasUsableOpenRouterKey
+    ) {
+      activeProvider =
+        "OpenRouter";
+    } else if (
+      hasUsableGroqKey
+    ) {
+      activeProvider =
+        "Groq";
+    }
+
     res.json({
       status:
         "ok",
@@ -1680,18 +1956,13 @@ app.get(
         "production",
 
       aiProvider:
-        hasUsableGeminiKey &&
-        !isGeminiCoolingDown()
-          ? "Google Gemini"
-          : hasUsableOpenRouterKey
-            ? "OpenRouter"
-            : "Not configured",
+        activeProvider,
 
       fallbackProvider:
-        "OpenRouter",
+        "OpenRouter → Groq",
 
       api:
-        "Gemini Interactions API + OpenRouter",
+        "Gemini Interactions API + OpenRouter + Groq",
 
       model:
         GEMINI_MODEL,
@@ -1699,11 +1970,17 @@ app.get(
       fallbackModel:
         OPENROUTER_MODEL,
 
+      groqModel:
+        GROQ_MODEL,
+
       hasGeminiKey:
         hasUsableGeminiKey,
 
       hasOpenRouterKey:
         hasUsableOpenRouterKey,
+
+      hasGroqKey:
+        hasUsableGroqKey,
 
       geminiCooldown:
         {
@@ -1728,6 +2005,9 @@ app.get(
         openRouterTimeoutMs:
           OPENROUTER_TIMEOUT_MS,
 
+        groqTimeoutMs:
+          GROQ_TIMEOUT_MS,
+
         defaultMaxTokens:
           DEFAULT_MAX_TOKENS,
 
@@ -1735,7 +2015,7 @@ app.get(
           SEARCH_MAX_TOKENS,
 
         architecture:
-          "Fast Gemini primary + OpenRouter fallback + quota cooldown + real request cancellation",
+          "Fast Gemini primary + OpenRouter fallback + Groq fallback + quota cooldown + real request cancellation",
       },
 
       search:
@@ -1788,6 +2068,23 @@ app.get(
           hasUsableOpenRouterKey,
       },
 
+      groqDiagnostics: {
+        environmentVariableExists:
+          rawGroqKey.length > 0,
+
+        trimmedValueExists:
+          trimmedGroqKey.length > 0,
+
+        keyLength:
+          trimmedGroqKey.length,
+
+        placeholderDetected:
+          groqPlaceholderDetected,
+
+        usableKeyDetected:
+          hasUsableGroqKey,
+      },
+
       agent: {
         enabled:
           true,
@@ -1796,7 +2093,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Gemini + OpenRouter Fallback + JSON Agent Protocol + Local Tool Controller",
+          "Gemini + OpenRouter + Groq Fallback + JSON Agent Protocol + Local Tool Controller",
 
         tools: [
           "calculator",
@@ -2908,6 +3205,13 @@ app.post(
               : openRouterError
           );
 
+          /*
+           * Search remains Gemini → OpenRouter because
+           * Groq is currently integrated as the general
+           * AI provider fallback, not as a replacement
+           * web-search engine.
+           */
+
           return res.status(503).json({
             error:
               "Live web search is temporarily unavailable.",
@@ -3554,6 +3858,9 @@ async function startServer() {
       const runtimeOpenRouterKey =
         getOpenRouterKey();
 
+      const runtimeGroqKey =
+        getGroqKey();
+
       const geminiUsable =
         runtimeGeminiKey.length > 0 &&
         !isPlaceholderKey(
@@ -3566,6 +3873,12 @@ async function startServer() {
           runtimeOpenRouterKey
         );
 
+      const groqUsable =
+        runtimeGroqKey.length > 0 &&
+        !isPlaceholderKey(
+          runtimeGroqKey
+        );
+
       console.log(
         `[Nodysom AI] Gemini available: ${geminiUsable}`
       );
@@ -3575,11 +3888,19 @@ async function startServer() {
       );
 
       console.log(
+        `[Nodysom AI] Groq available: ${groqUsable}`
+      );
+
+      console.log(
         `[Nodysom AI] Gemini model: ${GEMINI_MODEL}`
       );
 
       console.log(
         `[Nodysom AI] OpenRouter model: ${OPENROUTER_MODEL}`
+      );
+
+      console.log(
+        `[Nodysom AI] Groq model: ${GROQ_MODEL}`
       );
 
       console.log(
@@ -3595,6 +3916,10 @@ async function startServer() {
       );
 
       console.log(
+        `[Nodysom AI] Groq timeout: ${GROQ_TIMEOUT_MS}ms`
+      );
+
+      console.log(
         `[Nodysom AI] Gemini cooldown: ${Math.round(
           GEMINI_COOLDOWN_MS / 60000
         )} minutes`
@@ -3606,6 +3931,10 @@ async function startServer() {
 
       console.log(
         `[Nodysom Search] Fallback: OpenRouter Web Search`
+      );
+
+      console.log(
+        `[Nodysom AI] General AI fallback chain: Gemini → OpenRouter → Groq`
       );
 
       console.log(
