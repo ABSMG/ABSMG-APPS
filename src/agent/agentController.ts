@@ -1,11 +1,16 @@
 import {
-  detectLocalTool,
-  runLocalTool,
+  detectTool,
+  runTool,
+  type AgentToolName,
+  type AgentToolResult,
+  type DetectedTool,
 } from "./tools";
 
-/* =========================================================
-   TYPES
-========================================================= */
+/**
+ * =========================================================
+ * AGENT REQUEST
+ * =========================================================
+ */
 
 export interface AgentRequest {
   message: string;
@@ -27,14 +32,25 @@ export interface AgentRequest {
   language?: string;
 }
 
-export interface AgentToolCall {
-  tool:
-    | "calculator"
-    | "time"
-    | "text_stats";
+/**
+ * =========================================================
+ * AI TOOL CALL
+ * =========================================================
+ *
+ * This is returned by the AI when it wants a deterministic
+ * local tool to execute.
+ */
 
+export interface AgentToolCall {
+  tool: AgentToolName;
   input?: string;
 }
+
+/**
+ * =========================================================
+ * AI ANSWER
+ * =========================================================
+ */
 
 export interface AgentAIAnswer {
   reply: string;
@@ -45,6 +61,12 @@ export interface AgentAIAnswer {
 
   toolCall?: AgentToolCall | null;
 }
+
+/**
+ * =========================================================
+ * AGENT RESULT
+ * =========================================================
+ */
 
 export interface AgentResult {
   reply: string;
@@ -64,326 +86,16 @@ export interface AgentResult {
   toolsUsed: string[];
 }
 
-/* =========================================================
-   CONFIG
-========================================================= */
-
-const MAX_AGENT_STEPS = 3;
-
-const MAX_MESSAGE_LENGTH = 4000;
-
-const MAX_HISTORY_MESSAGES = 6;
-
-const MAX_HISTORY_ITEM_LENGTH = 1200;
-
-const MAX_MEMORY_ITEMS = 6;
-
-const MAX_MEMORY_LENGTH = 500;
-
-const MAX_TOOL_RESULT_LENGTH = 1800;
-
-const MAX_REPLY_LENGTH = 10000;
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function cleanText(
-  value: unknown,
-  maxLength = 4000
-): string {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return "";
-  }
-
-  return String(value)
-    .replace(/\u0000/g, "")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function stringifyToolResult(
-  value: unknown
-): string {
-  try {
-    const text =
-      typeof value === "string"
-        ? value
-        : JSON.stringify(value);
-
-    return cleanText(
-      text,
-      MAX_TOOL_RESULT_LENGTH
-    );
-  } catch {
-    return "";
-  }
-}
-
-/* =========================================================
-   HISTORY
-========================================================= */
-
-function normalizeHistory(
-  history: unknown
-): Array<{
-  role: "user" | "assistant";
-  content: string;
-}> {
-  if (!Array.isArray(history)) {
-    return [];
-  }
-
-  return history
-    .slice(-MAX_HISTORY_MESSAGES)
-    .map((item: any) => {
-      const role =
-        item?.role === "user"
-          ? "user"
-          : "assistant";
-
-      const content =
-        cleanText(
-          item?.content,
-          MAX_HISTORY_ITEM_LENGTH
-        );
-
-      return {
-        role,
-        content,
-      };
-    })
-    .filter(
-      (item) =>
-        Boolean(item.content)
-    );
-}
-
-/* =========================================================
-   MEMORIES
-========================================================= */
-
-function normalizeMemories(
-  memories: unknown
-): Array<{
-  content: string;
-  [key: string]: any;
-}> {
-  if (!Array.isArray(memories)) {
-    return [];
-  }
-
-  return memories
-    .slice(
-      -MAX_MEMORY_ITEMS
-    )
-    .map((item: any) => {
-      if (
-        typeof item ===
-        "string"
-      ) {
-        return {
-          content:
-            cleanText(
-              item,
-              MAX_MEMORY_LENGTH
-            ),
-        };
-      }
-
-      return {
-        ...item,
-        content:
-          cleanText(
-            item?.content,
-            MAX_MEMORY_LENGTH
-          ),
-      };
-    })
-    .filter(
-      (item) =>
-        Boolean(item.content)
-    );
-}
-
-/* =========================================================
-   PROFILE
-========================================================= */
-
-function normalizeProfile(
-  profile:
-    | AgentRequest["userProfile"]
-    | undefined
-) {
-  if (!profile) {
-    return null;
-  }
-
-  return {
-    name:
-      cleanText(
-        profile.name,
-        100
-      ),
-
-    preferredLanguage:
-      cleanText(
-        profile.preferredLanguage,
-        40
-      ),
-
-    goals:
-      cleanText(
-        profile.goals,
-        500
-      ),
-
-    country:
-      cleanText(
-        profile.country,
-        80
-      ),
-
-    tier:
-      profile.tier,
-
-    lowDataMode:
-      Boolean(
-        profile.lowDataMode
-      ),
-
-    interests:
-      Array.isArray(
-        profile.interests
-      )
-        ? profile.interests
-            .slice(0, 10)
-            .map((item) =>
-              cleanText(
-                item,
-                80
-              )
-            )
-            .filter(Boolean)
-        : [],
-  };
-}
-
-/* =========================================================
-   TOOL DETECTION
-========================================================= */
-
-function tryDetectTool(
-  message: string
-) {
-  try {
-    const detected =
-      detectLocalTool(
-        message
-      );
-
-    if (!detected) {
-      return null;
-    }
-
-    const tool =
-      cleanText(
-        detected.tool,
-        100
-      );
-
-    const input =
-      cleanText(
-        detected.input,
-        1000
-      );
-
-    if (!tool) {
-      return null;
-    }
-
-    return {
-      tool,
-      input,
-    };
-  } catch (error) {
-    console.warn(
-      "[Nodysom Agent] Tool detection failed:",
-      error
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   TOOL EXECUTION
-========================================================= */
-
-async function executeTool(
-  tool: AgentToolCall
-): Promise<{
-  success: boolean;
-  tool: string;
-  result: string;
-}> {
-  try {
-    const result =
-      await runLocalTool(
-        tool.tool,
-        tool.input || ""
-      );
-
-    const output =
-      stringifyToolResult(
-        result
-      );
-
-    return {
-      success: true,
-
-      tool:
-        tool.tool,
-
-      result:
-        output ||
-        "The tool completed successfully but returned no readable result.",
-    };
-  } catch (error) {
-    console.error(
-      `[Nodysom Agent] Tool "${tool.tool}" failed:`,
-      error
-    );
-
-    return {
-      success: false,
-
-      tool:
-        tool.tool,
-
-      result:
-        "The requested local tool could not be completed.",
-    };
-  }
-}
-
-/* =========================================================
-   CALLBACK TYPE
-========================================================= */
-
-/*
- * server.ts owns the actual AI provider logic.
+/**
+ * =========================================================
+ * AI CALLBACK
+ * =========================================================
  *
- * This callback is supplied by server.ts:
+ * server.ts supplies the actual AI implementation.
  *
- * runAgent(request, generateAgentAnswer)
- *
- * generateAgentAnswer()
- * -> Gemini
- * -> OpenRouter fallback
+ * IMPORTANT:
+ * agentController.ts does NOT call Gemini or OpenRouter
+ * directly.
  */
 
 export type GenerateAgentAnswer = (
@@ -391,398 +103,461 @@ export type GenerateAgentAnswer = (
   toolResult?: string
 ) => Promise<AgentAIAnswer>;
 
-/* =========================================================
-   VALIDATE TOOL REQUEST
-========================================================= */
+/**
+ * =========================================================
+ * CONSTANTS
+ * =========================================================
+ *
+ * Keep this small to avoid unnecessary AI calls.
+ */
 
-function normalizeToolCall(
+const MAX_AGENT_STEPS = 3;
+
+/**
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ */
+
+function cleanMessage(
   value: unknown
-): AgentToolCall | null {
+): string {
   if (
-    !value ||
-    typeof value !==
-      "object" ||
-    Array.isArray(value)
+    typeof value !== "string"
   ) {
-    return null;
+    return "";
   }
 
-  const raw =
-    value as any;
-
-  const tool =
-    cleanText(
-      raw.tool,
-      100
-    );
-
-  const allowedTools = [
-    "calculator",
-    "time",
-    "text_stats",
-  ];
-
-  if (
-    !allowedTools.includes(
-      tool
-    )
-  ) {
-    return null;
-  }
-
-  return {
-    tool:
-      tool as
-        | "calculator"
-        | "time"
-        | "text_stats",
-
-    input:
-      cleanText(
-        raw.input,
-        1000
-      ),
-  };
+  return value.trim();
 }
 
-/* =========================================================
-   MAIN AGENT
-========================================================= */
+/**
+ * Convert any tool result into the short text that is
+ * passed back to the AI.
+ */
+
+function formatToolResult(
+  result: AgentToolResult
+): string {
+  if (result.ok) {
+    return (
+      `Tool: ${result.tool}\n` +
+      `Result:\n${result.result}`
+    );
+  }
+
+  return (
+    `Tool: ${result.tool}\n` +
+    `Error:\n${result.result}`
+  );
+}
+
+/**
+ * =========================================================
+ * RUN AGENT
+ * =========================================================
+ *
+ * Flow:
+ *
+ * User message
+ *      ↓
+ * Detect deterministic tool
+ *      ↓
+ * Run tool if needed
+ *      ↓
+ * Give result to AI
+ *      ↓
+ * Return final answer
+ *
+ * The local tools are:
+ *
+ * calculator
+ * time
+ * text_stats
+ */
 
 export async function runAgent(
   request: AgentRequest,
   generateAnswer: GenerateAgentAnswer
 ): Promise<AgentResult> {
-  const startedAt =
-    Date.now();
-
   const message =
-    cleanText(
-      request?.message,
-      MAX_MESSAGE_LENGTH
+    cleanMessage(
+      request.message
     );
 
+  /**
+   * Empty request.
+   */
   if (!message) {
-    throw new Error(
-      "Agent message is required."
-    );
+    return {
+      reply:
+        "Please enter a message so I can help you.",
+      usedTool: false,
+      tool: null,
+      toolResult: null,
+      detectedAction: null,
+      newMemory: null,
+      steps: 0,
+      toolsUsed: [],
+    };
   }
 
-  if (
-    typeof generateAnswer !==
-    "function"
-  ) {
-    throw new Error(
-      "Agent AI callback is not configured."
-    );
-  }
-
-  const normalizedRequest:
+  let currentRequest:
     AgentRequest = {
-    ...request,
-
-    message,
-
-    history:
-      normalizeHistory(
-        request.history
-      ),
-
-    memories:
-      normalizeMemories(
-        request.memories
-      ),
-
-    userProfile:
-      normalizeProfile(
-        request.userProfile
-      ) || undefined,
-  };
-
-  let steps = 0;
+      ...request,
+      message,
+    };
 
   let usedTool = false;
 
-  let toolName:
-    | string
-    | null = null;
+  let lastTool:
+    AgentToolName | null = null;
 
-  let toolResult:
-    | string
-    | null = null;
+  let lastToolResult:
+    string | null = null;
 
-  const toolsUsed: string[] =
-    [];
+  let detectedAction:
+    any | null = null;
 
-  let lastAnswer:
-    | AgentAIAnswer
-    | null = null;
+  let newMemory:
+    any | null = null;
 
-  /* =======================================================
-     FAST LOCAL TOOL PATH
-  ======================================================= */
+  const toolsUsed: string[] = [];
 
-  const directlyDetected =
-    tryDetectTool(
-      message
-    );
+  let steps = 0;
 
-  if (directlyDetected) {
-    const directTool =
-      normalizeToolCall(
-        directlyDetected
-      );
+  /**
+   * =======================================================
+   * STEP 1 — DETERMINISTIC TOOL DETECTION
+   * =======================================================
+   *
+   * This avoids sending simple calculations/time requests
+   * to the AI unnecessarily.
+   */
 
-    if (directTool) {
-      console.log(
-        `[Nodysom Agent] Direct local tool: ${directTool.tool}`
-      );
+  const detection =
+    detectTool(message);
 
-      const executed =
-        await executeTool(
-          directTool
-        );
+  /**
+   * =======================================================
+   * DIRECT LOCAL TOOL
+   * =======================================================
+   */
 
-      usedTool = true;
-
-      toolName =
-        directTool.tool;
-
-      toolResult =
-        executed.result;
-
-      toolsUsed.push(
-        directTool.tool
-      );
-
-      /*
-       * One AI call after the tool.
-       *
-       * This is much faster than:
-       *
-       * AI -> tool -> AI -> tool -> AI
-       */
-
-      steps++;
-
-      lastAnswer =
-        await generateAnswer(
-          normalizedRequest,
-          toolResult
-        );
-
-      /*
-       * The direct tool already solved the
-       * tool selection problem.
-       *
-       * If the model asks for another tool,
-       * allow the normal loop below to handle
-       * at most one more request.
-       */
-
-      const nextTool =
-        normalizeToolCall(
-          lastAnswer?.toolCall
-        );
-
-      if (!nextTool) {
-        return {
-          reply:
-            cleanText(
-              lastAnswer?.reply,
-              MAX_REPLY_LENGTH
-            ) ||
-            toolResult ||
-            "Done.",
-
-          usedTool,
-
-          tool:
-            toolName,
-
-          toolResult,
-
-          detectedAction:
-            lastAnswer?.detectedAction ||
-            null,
-
-          newMemory:
-            lastAnswer?.newMemory ||
-            null,
-
-          steps,
-
-          toolsUsed,
-        };
-      }
-    }
-  }
-
-  /* =======================================================
-     NORMAL AGENT PATH
-  ======================================================= */
-
-  if (!lastAnswer) {
-    steps++;
-
-    lastAnswer =
-      await generateAnswer(
-        normalizedRequest
-      );
-  }
-
-  /* =======================================================
-     TOOL LOOP
-  ======================================================= */
-
-  for (
-    let iteration = 0;
-    iteration <
-      MAX_AGENT_STEPS;
-    iteration++
+  if (
+    detection.intent === "tool"
   ) {
-    if (!lastAnswer) {
-      break;
-    }
+    const detectedTool:
+      DetectedTool =
+        detection;
 
-    const requestedTool =
-      normalizeToolCall(
-        lastAnswer.toolCall
-      );
-
-    /*
-     * No tool requested.
-     *
-     * Return immediately.
-     *
-     * This is the main latency optimization.
-     */
-
-    if (!requestedTool) {
-      break;
-    }
-
-    /*
-     * Prevent duplicate tool loops.
-     */
-
-    if (
-      toolsUsed.includes(
-        requestedTool.tool
-      ) &&
-      requestedTool.tool !==
-        "calculator"
-    ) {
-      console.warn(
-        `[Nodysom Agent] Prevented duplicate tool loop: ${requestedTool.tool}`
-      );
-
-      break;
-    }
-
-    const executed =
-      await executeTool(
-        requestedTool
+    const toolResult =
+      runTool(
+        detectedTool.tool,
+        detectedTool.input
       );
 
     usedTool = true;
 
-    toolName =
-      requestedTool.tool;
+    lastTool =
+      detectedTool.tool;
 
-    toolResult =
-      executed.result;
+    lastToolResult =
+      toolResult.result;
+
+    toolsUsed.push(
+      detectedTool.tool
+    );
+
+    steps += 1;
+
+    /**
+     * -----------------------------------------------------
+     * If the tool failed, return the error directly.
+     * No need for another expensive AI request.
+     * -----------------------------------------------------
+     */
+
+    if (!toolResult.ok) {
+      return {
+        reply:
+          toolResult.result,
+        usedTool: true,
+        tool: detectedTool.tool,
+        toolResult:
+          toolResult.result,
+        detectedAction: null,
+        newMemory: null,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    /**
+     * -----------------------------------------------------
+     * For deterministic tools, return a clean answer
+     * without making another AI request.
+     *
+     * This makes calculator/time/text-stat requests
+     * significantly faster.
+     * -----------------------------------------------------
+     */
+
+    if (
+      detectedTool.tool ===
+      "calculator"
+    ) {
+      return {
+        reply:
+          toolResult.result,
+        usedTool: true,
+        tool: detectedTool.tool,
+        toolResult:
+          toolResult.result,
+        detectedAction: null,
+        newMemory: null,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    if (
+      detectedTool.tool ===
+      "time"
+    ) {
+      return {
+        reply:
+          `The current UTC time is ${toolResult.result}.`,
+        usedTool: true,
+        tool: detectedTool.tool,
+        toolResult:
+          toolResult.result,
+        detectedAction: null,
+        newMemory: null,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    if (
+      detectedTool.tool ===
+      "text_stats"
+    ) {
+      return {
+        reply:
+          toolResult.result,
+        usedTool: true,
+        tool: detectedTool.tool,
+        toolResult:
+          toolResult.result,
+        detectedAction: null,
+        newMemory: null,
+        steps,
+        toolsUsed,
+      };
+    }
+  }
+
+  /**
+   * =======================================================
+   * NORMAL AI REQUEST
+   * =======================================================
+   */
+
+  for (
+    let step = 0;
+    step < MAX_AGENT_STEPS;
+    step += 1
+  ) {
+    steps += 1;
+
+    /**
+     * -----------------------------------------------------
+     * Ask the AI for the answer.
+     *
+     * If a previous tool was executed, provide its result.
+     * -----------------------------------------------------
+     */
+
+    const answer =
+      await generateAnswer(
+        currentRequest,
+        lastToolResult || undefined
+      );
+
+    /**
+     * Preserve AI metadata.
+     */
+
+    detectedAction =
+      answer.detectedAction ??
+      null;
+
+    newMemory =
+      answer.newMemory ??
+      null;
+
+    /**
+     * -----------------------------------------------------
+     * If AI did not request another tool,
+     * return immediately.
+     * -----------------------------------------------------
+     */
+
+    if (
+      !answer.toolCall
+    ) {
+      return {
+        reply:
+          cleanMessage(
+            answer.reply
+          ) ||
+          "I’m ready to help. What would you like to do?",
+        usedTool,
+        tool:
+          lastTool,
+        toolResult:
+          lastToolResult,
+        detectedAction,
+        newMemory,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    /**
+     * -----------------------------------------------------
+     * AI requested a deterministic tool.
+     * -----------------------------------------------------
+     */
+
+    const requestedTool =
+      answer.toolCall.tool;
+
+    const toolInput =
+      cleanMessage(
+        answer.toolCall.input
+      );
+
+    /**
+     * Only allow known local tools.
+     */
+
+    if (
+      requestedTool !==
+        "calculator" &&
+      requestedTool !==
+        "time" &&
+      requestedTool !==
+        "text_stats"
+    ) {
+      return {
+        reply:
+          cleanMessage(
+            answer.reply
+          ) ||
+          "I couldn't execute that tool.",
+        usedTool,
+        tool:
+          lastTool,
+        toolResult:
+          lastToolResult,
+        detectedAction,
+        newMemory,
+        steps,
+        toolsUsed,
+      };
+    }
+
+    /**
+     * -----------------------------------------------------
+     * Execute requested tool.
+     * -----------------------------------------------------
+     */
+
+    const result =
+      runTool(
+        requestedTool,
+        toolInput
+      );
+
+    usedTool = true;
+
+    lastTool =
+      requestedTool;
+
+    lastToolResult =
+      result.result;
 
     if (
       !toolsUsed.includes(
-        requestedTool.tool
+        requestedTool
       )
     ) {
       toolsUsed.push(
-        requestedTool.tool
+        requestedTool
       );
     }
 
-    /*
-     * Tool execution itself does not require
-     * another model call unless we need the model
-     * to explain the result.
+    /**
+     * -----------------------------------------------------
+     * Tool failed.
+     * -----------------------------------------------------
      */
 
-    if (
-      !executed.success
-    ) {
-      break;
+    if (!result.ok) {
+      return {
+        reply:
+          result.result,
+        usedTool: true,
+        tool:
+          requestedTool,
+        toolResult:
+          result.result,
+        detectedAction,
+        newMemory,
+        steps,
+        toolsUsed,
+      };
     }
 
-    /*
-     * Ask AI to produce the final answer
-     * using the tool result.
+    /**
+     * -----------------------------------------------------
+     * Give the tool result back to the AI on the next
+     * iteration so it can produce a natural response.
+     * -----------------------------------------------------
      */
 
-    if (
-      steps >=
-      MAX_AGENT_STEPS
-    ) {
-      break;
-    }
-
-    steps++;
-
-    lastAnswer =
-      await generateAnswer(
-        normalizedRequest,
-        toolResult
-      );
+    currentRequest = {
+      ...currentRequest,
+      message:
+        `${currentRequest.message}\n\n` +
+        `A local tool was executed.\n` +
+        formatToolResult(
+          result
+        ),
+    };
   }
 
-  /* =======================================================
-     FINAL RESULT
-  ======================================================= */
-
-  const finalReply =
-    cleanText(
-      lastAnswer?.reply,
-      MAX_REPLY_LENGTH
-    );
-
-  const totalTime =
-    Date.now() -
-    startedAt;
-
-  console.log(
-    `[Nodysom Agent] completed in ${totalTime}ms | steps=${steps} | tool=${toolName || "none"}`
-  );
+  /**
+   * =======================================================
+   * SAFETY FALLBACK
+   * =======================================================
+   *
+   * Prevent infinite agent loops.
+   */
 
   return {
     reply:
-      finalReply ||
-      toolResult ||
-      "I am ready to help.",
-
+      "I completed the available processing, but I couldn't finish the request within the allowed steps.",
     usedTool,
-
     tool:
-      toolName,
-
-    toolResult,
-
-    detectedAction:
-      lastAnswer?.detectedAction ||
-      null,
-
-    newMemory:
-      lastAnswer?.newMemory ||
-      null,
-
+      lastTool,
+    toolResult:
+      lastToolResult,
+    detectedAction,
+    newMemory,
     steps,
-
     toolsUsed,
   };
 }
-
-/* =========================================================
-   DEFAULT EXPORT
-========================================================= */
-
-export default runAgent;
