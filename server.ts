@@ -11,6 +11,10 @@ import {
 } from "vite";
 
 import {
+  GoogleGenAI,
+} from "@google/genai";
+
+import {
   runAgent,
   type AgentRequest,
   type AgentAIAnswer,
@@ -29,23 +33,17 @@ const PORT =
 
 /* =========================================================
    AI CONFIGURATION
+   GOOGLE GEMINI
 ========================================================= */
 
 const AI_TIMEOUT_MS = 30000;
 
-const EXPLABS_BASE_URL =
+const GEMINI_MODEL =
   String(
-    process.env.EXPLABS_BASE_URL ||
-      "https://api.experientiallabs.ai/v1"
+    process.env.GEMINI_MODEL ||
+      "gemini-2.5-flash-lite"
   )
-    .trim()
-    .replace(/\/+$/, "");
-
-const EXPLABS_MODEL =
-  String(
-    process.env.EXPLABS_MODEL ||
-      "gpt-5.6-luna"
-  ).trim();
+    .trim();
 
 /* =========================================================
    PERFORMANCE SETTINGS
@@ -139,12 +137,12 @@ app.use(
 );
 
 /* =========================================================
-   EXPERIENTIAL LABS CONFIG
+   GOOGLE GEMINI CONFIG
 ========================================================= */
 
-function getExplabsKey(): string {
+function getGeminiKey(): string {
   return String(
-    process.env.EXPLABS_API_KEY || ""
+    process.env.GEMINI_API_KEY || ""
   ).trim();
 }
 
@@ -159,9 +157,9 @@ function isPlaceholderKey(
   );
 }
 
-function hasExplabsKey(): boolean {
+function hasGeminiKey(): boolean {
   const key =
-    getExplabsKey();
+    getGeminiKey();
 
   return (
     key.length > 0 &&
@@ -183,6 +181,10 @@ interface ChatMessage {
     | "assistant";
 
   content: string;
+}
+
+interface GeminiResponse {
+  text: string;
 }
 
 /* =========================================================
@@ -366,190 +368,108 @@ Goals: ${cleanText(
 }
 
 /* =========================================================
-   EXPERIENTIAL LABS CHAT COMPLETIONS
+   GOOGLE GEMINI REQUEST
 ========================================================= */
 
-interface ExplabsResponse {
-  id?: string;
-
-  object?: string;
-
-  model?: string;
-
-  choices?: Array<{
-    index?: number;
-
-    message?: {
-      role?: string;
-      content?: string | null;
-    };
-
-    finish_reason?: string | null;
-  }>;
-
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
-
-  provider?: string;
-
-  error?: {
-    message?: string;
-    type?: string;
-    code?: string;
-    param?: string | null;
-  };
-}
-
-/* =========================================================
-   EXPERIENTIAL LABS ERROR HELPERS
-========================================================= */
-
-function extractExplabsErrorCode(
-  data: ExplabsResponse | null
-): string | null {
-  const code =
-    data?.error?.code;
-
-  return code
-    ? cleanText(code, 120)
-    : null;
-}
-
-function extractExplabsRequestId(
-  response: Response
-): string | null {
-  return (
-    response.headers.get(
-      "x-request-id"
-    ) ||
-    response.headers.get(
-      "x-experiential-request-id"
-    ) ||
-    null
-  );
-}
-
-/* =========================================================
-   EXPERIENTIAL LABS REQUEST
-========================================================= */
-
-async function callExplabs(
+async function callGemini(
   messages: ChatMessage[],
   options?: {
     json?: boolean;
     maxTokens?: number;
   }
-): Promise<ExplabsResponse> {
+): Promise<GeminiResponse> {
   const apiKey =
-    getExplabsKey();
+    getGeminiKey();
 
   if (!apiKey) {
     throw new Error(
-      "EXPLABS_API_KEY is not configured."
+      "GEMINI_API_KEY is not configured."
     );
   }
 
   if (isPlaceholderKey(apiKey)) {
     throw new Error(
-      "EXPLABS_API_KEY is still a placeholder."
+      "GEMINI_API_KEY is still a placeholder."
     );
   }
 
-  const body: JsonRecord = {
-    model:
-      EXPLABS_MODEL,
+  const ai =
+    new GoogleGenAI({
+      apiKey,
+    });
 
-    messages,
+  const systemMessage =
+    messages.find(
+      (message) =>
+        message.role === "system"
+    );
 
-    max_tokens:
+  const nonSystemMessages =
+    messages.filter(
+      (message) =>
+        message.role !== "system"
+    );
+
+  const contents =
+    nonSystemMessages
+      .map(
+        (message) => {
+          const role =
+            message.role ===
+            "assistant"
+              ? "Assistant"
+              : "User";
+
+          return `${role}: ${message.content}`;
+        }
+      )
+      .join("\n\n");
+
+  const config: any = {
+    maxOutputTokens:
       options?.maxTokens || 4096,
   };
 
+  if (
+    systemMessage?.content
+  ) {
+    config.systemInstruction =
+      systemMessage.content;
+  }
+
   if (options?.json) {
-    body.response_format = {
-      type: "json_object",
-    };
+    config.responseMimeType =
+      "application/json";
   }
 
   const response =
     await withTimeout(
-      fetch(
-        `${EXPLABS_BASE_URL}/chat/completions`,
-        {
-          method: "POST",
+      ai.models.generateContent({
+        model:
+          GEMINI_MODEL,
 
-          headers: {
-            Authorization:
-              `Bearer ${apiKey}`,
+        contents:
+          contents || "Hello",
 
-            "Content-Type":
-              "application/json",
-          },
-
-          body:
-            JSON.stringify(body),
-        }
-      )
+        config,
+      })
     );
 
-  const raw =
-    await response.text();
-
-  let data:
-    | ExplabsResponse
-    | null = null;
-
-  try {
-    data =
-      JSON.parse(raw);
-  } catch {
-    data = null;
-  }
-
-  const requestId =
-    extractExplabsRequestId(
-      response
+  const text =
+    cleanText(
+      response.text,
+      30000
     );
 
-  if (!response.ok) {
-    const apiMessage =
-      data?.error?.message ||
-      raw ||
-      `Experiential Labs request failed with HTTP ${response.status}.`;
-
-    const errorCode =
-      extractExplabsErrorCode(
-        data
-      );
-
-    const codeSuffix =
-      errorCode
-        ? ` [code=${errorCode}]`
-        : "";
-
-    const requestSuffix =
-      requestId
-        ? ` [request_id=${requestId}]`
-        : "";
-
+  if (!text) {
     throw new Error(
-      `Experiential Labs API error (${response.status})${codeSuffix}${requestSuffix}: ${cleanText(
-        apiMessage,
-        1000
-      )}`
+      "Google Gemini returned an empty response."
     );
   }
 
-  if (!data) {
-    throw new Error(
-      "Experiential Labs returned invalid JSON."
-    );
-  }
-
-  return data;
+  return {
+    text,
+  };
 }
 
 /* =========================================================
@@ -557,10 +477,10 @@ async function callExplabs(
 ========================================================= */
 
 function extractResponseText(
-  response: ExplabsResponse
+  response: GeminiResponse
 ): string {
   return cleanText(
-    response.choices?.[0]?.message?.content,
+    response.text,
     30000
   );
 }
@@ -820,7 +740,7 @@ ${historyText}
 
 /* =========================================================
    AGENT AI ANSWER
-   EXPERIENTIAL LABS JSON PROTOCOL
+   GOOGLE GEMINI JSON PROTOCOL
 ========================================================= */
 
 async function generateAgentAnswer(
@@ -837,11 +757,11 @@ async function generateAgentAnswer(
      OFFLINE MODE
   ------------------------------------------------------- */
 
-  if (!hasExplabsKey()) {
+  if (!hasGeminiKey()) {
     return {
       reply: toolResult
         ? `Tool result: ${toolResult}`
-        : `I received your request: "${message}". Experiential Labs is not connected yet.`,
+        : `I received your request: "${message}". Google Gemini is not connected yet.`,
 
       detectedAction:
         null,
@@ -898,7 +818,7 @@ If another local tool is required, return a toolCall instead.
 
   try {
     const response =
-      await callExplabs(
+      await callGemini(
         messages,
         {
           json: true,
@@ -1128,7 +1048,7 @@ If another local tool is required, return a toolCall instead.
         : String(error);
 
     console.error(
-      "[Nodysom AI] Experiential Labs request error:",
+      "[Nodysom AI] Google Gemini request error:",
       errorMessage
     );
 
@@ -1175,7 +1095,7 @@ app.get(
     res
   ) => {
     const rawKey =
-      getExplabsKey();
+      getGeminiKey();
 
     const trimmedKey =
       rawKey.trim();
@@ -1200,18 +1120,15 @@ app.get(
         "Plan Your Day. Live Smarter.",
 
       aiProvider:
-        "Experiential Labs",
-
-      baseUrl:
-        EXPLABS_BASE_URL,
+        "Google Gemini",
 
       model:
-        EXPLABS_MODEL,
+        GEMINI_MODEL,
 
-      hasExplabsKey:
+      hasGeminiKey:
         hasApiKey,
 
-      explabsDiagnostics: {
+      geminiDiagnostics: {
         environmentVariableExists:
           rawKey.length > 0,
 
@@ -1235,7 +1152,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Experiential Labs JSON Agent Protocol + Local Tool Controller",
+          "Google Gemini JSON Agent Protocol + Local Tool Controller",
 
         tools: [
           "calculator",
@@ -1561,7 +1478,7 @@ app.post(
           30
         );
 
-      if (!hasExplabsKey()) {
+      if (!hasGeminiKey()) {
         return res.json({
           summary:
             `Search request received: "${query}"`,
@@ -1620,7 +1537,7 @@ Rules:
         ];
 
       const response =
-        await callExplabs(
+        await callGemini(
           messages,
           {
             json: false,
@@ -1709,7 +1626,7 @@ app.post(
         });
       }
 
-      if (!hasExplabsKey()) {
+      if (!hasGeminiKey()) {
         return res.status(503).json({
           error:
             "Translation AI is not connected.",
@@ -1765,7 +1682,7 @@ Rules:
         ];
 
       const response =
-        await callExplabs(
+        await callGemini(
           messages,
           {
             json: true,
@@ -1873,7 +1790,7 @@ app.post(
         });
       }
 
-      if (!hasExplabsKey()) {
+      if (!hasGeminiKey()) {
         return res.json({
           schedule: [
             {
@@ -2009,7 +1926,7 @@ ${prompt}
         ];
 
       const response =
-        await callExplabs(
+        await callGemini(
           messages,
           {
             json: true,
@@ -2206,7 +2123,7 @@ async function startServer() {
       );
 
       const runtimeKey =
-        getExplabsKey();
+        getGeminiKey();
 
       const runtimeKeyUsable =
         runtimeKey.length > 0 &&
@@ -2215,15 +2132,11 @@ async function startServer() {
         );
 
       console.log(
-        `[Nodysom AI] Experiential Labs key available: ${runtimeKeyUsable}`
+        `[Nodysom AI] Google Gemini key available: ${runtimeKeyUsable}`
       );
 
       console.log(
-        `[Nodysom AI] Experiential Labs base URL: ${EXPLABS_BASE_URL}`
-      );
-
-      console.log(
-        `[Nodysom AI] Experiential Labs model: ${EXPLABS_MODEL}`
+        `[Nodysom AI] Google Gemini model: ${GEMINI_MODEL}`
       );
     }
   );
