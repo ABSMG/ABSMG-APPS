@@ -1,4 +1,4 @@
-const CACHE_NAME = "nodysom-ai-v3";
+const CACHE_NAME = "nodysom-ai-v1";
 
 const APP_SHELL = [
   "/",
@@ -7,17 +7,21 @@ const APP_SHELL = [
   "/icons/icon-512.svg"
 ];
 
+// Install
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
-      .catch(() => {})
+      .catch((error) => {
+        console.warn("Nodysom AI cache install failed:", error);
+      })
   );
 
   self.skipWaiting();
 });
 
+// Activate
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
@@ -33,19 +37,24 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Fetch
 self.addEventListener("fetch", (event) => {
   const request = event.request;
 
+  // Only handle GET requests
   if (request.method !== "GET") {
     return;
   }
 
   const url = new URL(request.url);
 
-  if (
-    url.origin !== self.location.origin ||
-    url.pathname.startsWith("/api/")
-  ) {
+  // Do not intercept external requests
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Never cache API requests
+  if (url.pathname.startsWith("/api/")) {
     return;
   }
 
@@ -53,29 +62,39 @@ self.addEventListener("fetch", (event) => {
     fetch(request)
       .then((response) => {
         if (response && response.ok) {
-          const copy = response.clone();
+          const responseClone = response.clone();
 
           caches
             .open(CACHE_NAME)
-            .then((cache) => cache.put(request, copy))
+            .then((cache) => {
+              cache.put(request, responseClone);
+            })
             .catch(() => {});
         }
 
         return response;
       })
       .catch(async () => {
-        const cached = await caches.match(request);
+        const cachedResponse = await caches.match(request);
 
-        return (
-          cached ||
-          (await caches.match("/")) ||
-          new Response("Nodysom AI is offline.", {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+
+        const cachedHome = await caches.match("/");
+
+        if (cachedHome) {
+          return cachedHome;
+        }
+
+        return new Response(
+          "Nodysom AI is currently offline.",
+          {
             status: 503,
             headers: {
-              "Content-Type":
-                "text/plain; charset=utf-8"
+              "Content-Type": "text/plain; charset=utf-8"
             }
-          })
+          }
         );
       })
   );
