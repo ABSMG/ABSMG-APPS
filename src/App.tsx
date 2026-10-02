@@ -1,5 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+
 import { Storage } from './lib/storage';
+
 import {
   getCurrentSession,
   loadCloudData,
@@ -8,7 +15,11 @@ import {
   signUp,
   signOut,
 } from './lib/cloudSync';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
+
+import {
+  supabase,
+  isSupabaseConfigured,
+} from './lib/supabase';
 
 import {
   TabType,
@@ -20,25 +31,49 @@ import {
   SmartAction,
 } from './types';
 
-import { TopHeader, BottomNav } from './components/Navigation';
+import {
+  TopHeader,
+  BottomNav,
+} from './components/Navigation';
+
 import { HomeView } from './components/HomeView';
 import { SearchView } from './components/SearchView';
 import { PlannerView } from './components/PlannerView';
 import { LearnView } from './components/LearnView';
 import { ProfileView } from './components/ProfileView';
-import { VoiceAssistantModal } from './components/VoiceAssistantModal';
-import { TranslatorModal } from './components/TranslatorModal';
-import { SmartActionModal } from './components/SmartActionModal';
-import { OnboardingModal } from './components/OnboardingModal';
+import {
+  VoiceAssistantModal,
+} from './components/VoiceAssistantModal';
+import {
+  TranslatorModal,
+} from './components/TranslatorModal';
+import {
+  SmartActionModal,
+} from './components/SmartActionModal';
+import {
+  OnboardingModal,
+} from './components/OnboardingModal';
 
 const AI_TIMEOUT_MS = 120000;
+
 const MAX_HISTORY = 6;
+
 const MAX_MESSAGE_LENGTH = 2000;
+
 const MAX_MEMORY_ITEMS = 6;
+
 const MAX_MEMORY_LENGTH = 500;
+
 const CLOUD_SYNC_DELAY = 1200;
 
+const ONBOARDING_KEY =
+  'lifeos_onboarding_completed';
+
 export default function App() {
+  // =========================================================
+  // APP STATE
+  // =========================================================
+
   const [currentTab, setCurrentTab] =
     useState<TabType>('home');
 
@@ -91,14 +126,18 @@ export default function App() {
 
   const [isOnboardingOpen, setIsOnboardingOpen] =
     useState(() => {
-      return !localStorage.getItem(
-        'lifeos_onboarding_completed'
-      );
+      try {
+        return !localStorage.getItem(
+          ONBOARDING_KEY
+        );
+      } catch {
+        return true;
+      }
     });
 
-  // ---------------------------------------------------------
-  // SUPABASE
-  // ---------------------------------------------------------
+  // =========================================================
+  // SUPABASE STATE
+  // =========================================================
 
   const [cloudUserId, setCloudUserId] =
     useState<string | null>(null);
@@ -109,22 +148,75 @@ export default function App() {
   const [cloudBusy, setCloudBusy] =
     useState(false);
 
+  /**
+   * IMPORTANT:
+   *
+   * cloudReady becomes true ONLY after cloud data has
+   * successfully been loaded or initialized.
+   *
+   * Automatic sync is blocked until this happens.
+   */
   const [cloudReady, setCloudReady] =
     useState(false);
 
+  /**
+   * Prevents an old/slow cloud login request from applying
+   * data after another login/logout has already happened.
+   */
+  const cloudRequestId =
+    useRef(0);
+
+  /**
+   * Prevents automatic sync from accidentally overwriting
+   * cloud data while hydration is still happening.
+   */
+  const cloudHydrated =
+    useRef(false);
+
+  /**
+   * Prevents duplicate cloud saves.
+   */
   const cloudSyncTimer =
     useRef<number | null>(null);
 
-  // ---------------------------------------------------------
-  // ONLINE / OFFLINE
-  // ---------------------------------------------------------
+  /**
+   * Prevents state updates after component unmount.
+   */
+  const mountedRef =
+    useRef(true);
+
+  // =========================================================
+  // MOUNT / UNMOUNT
+  // =========================================================
 
   useEffect(() => {
-    const handleOnline = () =>
-      setIsOnline(true);
+    mountedRef.current = true;
 
-    const handleOffline = () =>
+    return () => {
+      mountedRef.current = false;
+
+      if (
+        cloudSyncTimer.current !== null
+      ) {
+        window.clearTimeout(
+          cloudSyncTimer.current
+        );
+      }
+    };
+  }, []);
+
+  // =========================================================
+  // ONLINE / OFFLINE
+  // =========================================================
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+    };
+
+    const handleOffline = () => {
       setIsOnline(false);
+    };
 
     window.addEventListener(
       'online',
@@ -149,46 +241,305 @@ export default function App() {
     };
   }, []);
 
-  // ---------------------------------------------------------
-  // LOAD SUPABASE SESSION
-  // ---------------------------------------------------------
+  // =========================================================
+  // CLOUD LOGIN / HYDRATION
+  // =========================================================
 
-  useEffect(() => {
-    let mounted = true;
-
-    const loadSession = async () => {
-      if (!isSupabaseConfigured) {
-        setCloudReady(false);
-        return;
-      }
-
-      try {
-        const session =
-          await getCurrentSession();
-
-        if (!mounted) return;
-
-        if (session?.user) {
-          await handleCloudLogin(
-            session.user.id,
-            session.user.email || ''
-          );
-        } else {
-          setCloudUserId(null);
-          setCloudEmail('');
-          setCloudReady(false);
+  const handleCloudLogin =
+    useCallback(
+      async (
+        userId: string,
+        email: string
+      ) => {
+        if (!userId) {
+          return;
         }
-      } catch (error) {
-        console.error(
-          'Supabase session error:',
-          error
+
+        const requestId =
+          ++cloudRequestId.current;
+
+        cloudHydrated.current =
+          false;
+
+        setCloudReady(false);
+
+        setCloudUserId(
+          userId
         );
 
-        if (mounted) {
-          setCloudReady(false);
+        setCloudEmail(
+          email
+        );
+
+        setCloudBusy(true);
+
+        try {
+          const cloudData =
+            await loadCloudData(
+              userId
+            );
+
+          /**
+           * Ignore this response if another auth action
+           * happened while the request was running.
+           */
+          if (
+            requestId !==
+            cloudRequestId.current
+          ) {
+            return;
+          }
+
+          if (!mountedRef.current) {
+            return;
+          }
+
+          // ---------------------------------------------------
+          // EXISTING CLOUD ACCOUNT
+          // ---------------------------------------------------
+
+          if (cloudData) {
+            const restoredUser =
+              cloudData.user;
+
+            const restoredMemories =
+              Array.isArray(
+                cloudData.memories
+              )
+                ? cloudData.memories
+                : [];
+
+            const restoredPlanner =
+              Array.isArray(
+                cloudData.plannerItems
+              )
+                ? cloudData.plannerItems
+                : [];
+
+            const restoredHabits =
+              Array.isArray(
+                cloudData.habits
+              )
+                ? cloudData.habits
+                : [];
+
+            const restoredChat =
+              Array.isArray(
+                cloudData.chatHistory
+              )
+                ? cloudData.chatHistory
+                : [];
+
+            /**
+             * CLOUD IS THE SOURCE OF TRUTH AFTER LOGIN.
+             *
+             * Restore every data category together.
+             */
+            setUser(
+              restoredUser
+            );
+
+            setMemories(
+              restoredMemories
+            );
+
+            setPlannerItems(
+              restoredPlanner
+            );
+
+            setHabits(
+              restoredHabits
+            );
+
+            setChatHistory(
+              restoredChat
+            );
+
+            /**
+             * Also update local cache.
+             */
+            Storage.saveUser(
+              restoredUser
+            );
+
+            Storage.saveMemories(
+              restoredMemories
+            );
+
+            Storage.savePlannerItems(
+              restoredPlanner
+            );
+
+            Storage.saveHabits(
+              restoredHabits
+            );
+
+            Storage.saveChatHistory(
+              restoredChat
+            );
+
+            /**
+             * Mark hydration complete only AFTER every
+             * cloud value has been applied.
+             */
+            cloudHydrated.current =
+              true;
+
+            setCloudReady(
+              true
+            );
+
+            return;
+          }
+
+          // ---------------------------------------------------
+          // NEW CLOUD ACCOUNT
+          // ---------------------------------------------------
+
+          /**
+           * No cloud record exists yet.
+           *
+           * The current local data becomes the initial
+           * cloud backup.
+           */
+          const initialCloudData = {
+            user,
+            memories,
+            plannerItems,
+            habits,
+            chatHistory,
+          };
+
+          await saveCloudData(
+            userId,
+            initialCloudData
+          );
+
+          if (
+            requestId !==
+            cloudRequestId.current
+          ) {
+            return;
+          }
+
+          if (!mountedRef.current) {
+            return;
+          }
+
+          cloudHydrated.current =
+            true;
+
+          setCloudReady(
+            true
+          );
+        } catch (error) {
+          console.error(
+            'Cloud data load error:',
+            error
+          );
+
+          if (
+            requestId ===
+            cloudRequestId.current
+          ) {
+            cloudHydrated.current =
+              false;
+
+            setCloudReady(
+              false
+            );
+          }
+        } finally {
+          if (
+            requestId ===
+              cloudRequestId.current &&
+            mountedRef.current
+          ) {
+            setCloudBusy(
+              false
+            );
+          }
         }
-      }
-    };
+      },
+      [
+        user,
+        memories,
+        plannerItems,
+        habits,
+        chatHistory,
+      ]
+    );
+
+  // =========================================================
+  // INITIAL SUPABASE SESSION
+  // =========================================================
+
+  useEffect(() => {
+    let active = true;
+
+    const loadSession =
+      async () => {
+        if (
+          !isSupabaseConfigured
+        ) {
+          setCloudReady(
+            false
+          );
+
+          cloudHydrated.current =
+            false;
+
+          return;
+        }
+
+        try {
+          const session =
+            await getCurrentSession();
+
+          if (!active) {
+            return;
+          }
+
+          if (session?.user) {
+            await handleCloudLogin(
+              session.user.id,
+              session.user.email ||
+                ''
+            );
+          } else {
+            cloudRequestId.current++;
+
+            cloudHydrated.current =
+              false;
+
+            setCloudUserId(
+              null
+            );
+
+            setCloudEmail(
+              ''
+            );
+
+            setCloudReady(
+              false
+            );
+          }
+        } catch (error) {
+          console.error(
+            'Supabase session error:',
+            error
+          );
+
+          if (active) {
+            cloudHydrated.current =
+              false;
+
+            setCloudReady(
+              false
+            );
+          }
+        }
+      };
 
     loadSession();
 
@@ -198,154 +549,128 @@ export default function App() {
 
     if (supabase) {
       const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange(
-        async (_event, session) => {
-          if (!mounted) return;
+        data: {
+          subscription,
+        },
+      } =
+        supabase.auth.onAuthStateChange(
+          async (
+            _event,
+            session
+          ) => {
+            if (!active) {
+              return;
+            }
 
-          if (session?.user) {
-            await handleCloudLogin(
-              session.user.id,
-              session.user.email || ''
-            );
-          } else {
-            setCloudUserId(null);
-            setCloudEmail('');
-            setCloudReady(false);
+            if (session?.user) {
+              await handleCloudLogin(
+                session.user.id,
+                session.user.email ||
+                  ''
+              );
+            } else {
+              cloudRequestId.current++;
+
+              cloudHydrated.current =
+                false;
+
+              setCloudUserId(
+                null
+              );
+
+              setCloudEmail(
+                ''
+              );
+
+              setCloudReady(
+                false
+              );
+            }
           }
-        }
-      );
+        );
 
-      unsubscribe = () =>
+      unsubscribe = () => {
         subscription.unsubscribe();
+      };
     }
 
     return () => {
-      mounted = false;
+      active = false;
+
       unsubscribe?.();
     };
-  }, []);
+  }, [
+    handleCloudLogin,
+  ]);
 
-  // ---------------------------------------------------------
-  // CLOUD LOGIN / LOAD DATA
-  // ---------------------------------------------------------
-
-  const handleCloudLogin = async (
-    userId: string,
-    email: string
-  ) => {
-    setCloudUserId(userId);
-    setCloudEmail(email);
-
-    try {
-      setCloudBusy(true);
-
-      const cloudData =
-        await loadCloudData(userId);
-
-      if (cloudData) {
-        setUser(cloudData.user);
-
-        setMemories(
-          cloudData.memories || []
-        );
-
-        setPlannerItems(
-          cloudData.plannerItems || []
-        );
-
-        setHabits(
-          cloudData.habits || []
-        );
-
-        setChatHistory(
-          cloudData.chatHistory || []
-        );
-
-        Storage.saveUser(
-          cloudData.user
-        );
-
-        Storage.saveMemories(
-          cloudData.memories || []
-        );
-
-        Storage.savePlannerItems(
-          cloudData.plannerItems || []
-        );
-
-        Storage.saveHabits(
-          cloudData.habits || []
-        );
-
-        Storage.saveChatHistory(
-          cloudData.chatHistory || []
-        );
-      } else {
-        await saveCloudData(userId, {
-          user,
-          memories,
-          plannerItems,
-          habits,
-          chatHistory,
-        });
-      }
-
-      setCloudReady(true);
-    } catch (error) {
-      console.error(
-        'Cloud data load error:',
-        error
-      );
-
-      setCloudReady(false);
-    } finally {
-      setCloudBusy(false);
-    }
-  };
-
-  // ---------------------------------------------------------
+  // =========================================================
   // AUTOMATIC CLOUD SYNC
-  // ---------------------------------------------------------
+  // =========================================================
 
   useEffect(() => {
+    /**
+     * NEVER sync before hydration.
+     *
+     * This is the most important protection against
+     * localStorage overwriting cloud chat history.
+     */
     if (
       !cloudUserId ||
       !cloudReady ||
+      !cloudHydrated.current ||
       !isSupabaseConfigured
     ) {
       return;
     }
 
-    if (cloudSyncTimer.current) {
+    if (
+      cloudSyncTimer.current !== null
+    ) {
       window.clearTimeout(
         cloudSyncTimer.current
       );
     }
 
     cloudSyncTimer.current =
-      window.setTimeout(async () => {
-        try {
-          await saveCloudData(
-            cloudUserId,
-            {
-              user,
-              memories,
-              plannerItems,
-              habits,
-              chatHistory,
-            }
-          );
-        } catch (error) {
-          console.error(
-            'Cloud sync error:',
-            error
-          );
-        }
-      }, CLOUD_SYNC_DELAY);
+      window.setTimeout(
+        async () => {
+          /**
+           * Check again immediately before writing.
+           */
+          if (
+            !cloudUserId ||
+            !cloudReady ||
+            !cloudHydrated.current
+          ) {
+            return;
+          }
+
+          try {
+            await saveCloudData(
+              cloudUserId,
+              {
+                user,
+                memories,
+                plannerItems,
+                habits,
+                chatHistory,
+              }
+            );
+          } catch (error) {
+            console.error(
+              'Cloud sync error:',
+              error
+            );
+          }
+        },
+        CLOUD_SYNC_DELAY
+      );
 
     return () => {
-      if (cloudSyncTimer.current) {
+      if (
+        cloudSyncTimer.current !==
+        null
+      ) {
         window.clearTimeout(
           cloudSyncTimer.current
         );
@@ -361,483 +686,596 @@ export default function App() {
     chatHistory,
   ]);
 
-  // ---------------------------------------------------------
+  // =========================================================
   // AUTH ACTIONS
-  // ---------------------------------------------------------
+  // =========================================================
 
-  const handleCloudSignIn = async (
-    email: string,
-    password: string
-  ) => {
-    setCloudBusy(true);
+  const handleCloudSignIn =
+    async (
+      email: string,
+      password: string
+    ) => {
+      setCloudBusy(true);
 
-    try {
-      const { data, error } =
-        await signIn(
-          email,
-          password
-        );
+      try {
+        const {
+          data,
+          error,
+        } =
+          await signIn(
+            email,
+            password
+          );
 
-      if (error) {
-        throw error;
-      }
+        if (error) {
+          throw error;
+        }
 
-      if (!data.user) {
-        throw new Error(
-          'Login failed.'
-        );
-      }
+        if (!data.user) {
+          throw new Error(
+            'Login failed.'
+          );
+        }
 
-      await handleCloudLogin(
-        data.user.id,
-        data.user.email || email
-      );
-
-      return {
-        success: true,
-        message:
-          'Login successful.',
-      };
-    } catch (error: any) {
-      console.error(
-        'Sign in error:',
-        error
-      );
-
-      return {
-        success: false,
-        message:
-          error?.message ||
-          'Login failed. Please check your email and password.',
-      };
-    } finally {
-      setCloudBusy(false);
-    }
-  };
-
-  const handleCloudSignUp = async (
-    email: string,
-    password: string
-  ) => {
-    setCloudBusy(true);
-
-    try {
-      const { data, error } =
-        await signUp(
-          email,
-          password
-        );
-
-      if (error) {
-        throw error;
-      }
-
-      if (data.session?.user) {
+        /**
+         * Explicitly hydrate before reporting success.
+         */
         await handleCloudLogin(
-          data.session.user.id,
-          data.session.user.email ||
+          data.user.id,
+          data.user.email ||
             email
         );
 
         return {
           success: true,
           message:
-            'Account created successfully.',
+            'Login successful. Your cloud data has been restored.',
         };
+      } catch (error: any) {
+        console.error(
+          'Sign in error:',
+          error
+        );
+
+        return {
+          success: false,
+          message:
+            error?.message ||
+            'Login failed. Please check your email and password.',
+        };
+      } finally {
+        setCloudBusy(
+          false
+        );
       }
+    };
 
-      return {
-        success: true,
-        message:
-          'Account created. Please check your email to confirm your account.',
-      };
-    } catch (error: any) {
-      console.error(
-        'Sign up error:',
-        error
-      );
+  const handleCloudSignUp =
+    async (
+      email: string,
+      password: string
+    ) => {
+      setCloudBusy(true);
 
-      return {
-        success: false,
-        message:
-          error?.message ||
-          'Could not create your account.',
-      };
-    } finally {
-      setCloudBusy(false);
-    }
-  };
+      try {
+        const {
+          data,
+          error,
+        } =
+          await signUp(
+            email,
+            password
+          );
+
+        if (error) {
+          throw error;
+        }
+
+        if (
+          data.session?.user
+        ) {
+          await handleCloudLogin(
+            data.session.user.id,
+            data.session.user.email ||
+              email
+          );
+
+          return {
+            success: true,
+            message:
+              'Account created successfully. Your data is now backed up.',
+          };
+        }
+
+        return {
+          success: true,
+          message:
+            'Account created. Please check your email to confirm your account.',
+        };
+      } catch (error: any) {
+        console.error(
+          'Sign up error:',
+          error
+        );
+
+        return {
+          success: false,
+          message:
+            error?.message ||
+            'Could not create your account.',
+        };
+      } finally {
+        setCloudBusy(
+          false
+        );
+      }
+    };
 
   const handleCloudSignOut =
     async () => {
       setCloudBusy(true);
 
       try {
+        cloudRequestId.current++;
+
+        cloudHydrated.current =
+          false;
+
+        if (
+          cloudSyncTimer.current !==
+          null
+        ) {
+          window.clearTimeout(
+            cloudSyncTimer.current
+          );
+        }
+
         await signOut();
 
-        setCloudUserId(null);
-        setCloudEmail('');
-        setCloudReady(false);
+        setCloudUserId(
+          null
+        );
+
+        setCloudEmail(
+          ''
+        );
+
+        setCloudReady(
+          false
+        );
       } catch (error) {
         console.error(
           'Sign out error:',
           error
         );
       } finally {
-        setCloudBusy(false);
+        setCloudBusy(
+          false
+        );
       }
     };
 
-  // ---------------------------------------------------------
+  // =========================================================
   // USER
-  // ---------------------------------------------------------
+  // =========================================================
 
-  const handleUpdateUser = (
-    updated: Partial<UserProfile>
-  ) => {
-    const nextUser = {
-      ...user,
-      ...updated,
+  const handleUpdateUser =
+    (
+      updated: Partial<UserProfile>
+    ) => {
+      const nextUser = {
+        ...user,
+        ...updated,
+      };
+
+      setUser(
+        nextUser
+      );
+
+      Storage.saveUser(
+        nextUser
+      );
     };
 
-    setUser(nextUser);
-
-    Storage.saveUser(
-      nextUser
-    );
-  };
-
-  // ---------------------------------------------------------
+  // =========================================================
   // PLANNER
-  // ---------------------------------------------------------
+  // =========================================================
 
-  const handleToggleTask = (
-    id: string
-  ) => {
-    const updated =
-      plannerItems.map(
-        (item) =>
-          item.id === id
-            ? {
-                ...item,
-                completed:
-                  !item.completed,
-              }
-            : item
+  const handleToggleTask =
+    (
+      id: string
+    ) => {
+      const updated =
+        plannerItems.map(
+          (item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  completed:
+                    !item.completed,
+                }
+              : item
+        );
+
+      setPlannerItems(
+        updated
       );
 
-    setPlannerItems(updated);
-
-    Storage.savePlannerItems(
-      updated
-    );
-  };
-
-  const handleAddTask = (
-    item: Omit<PlannerItem, 'id'>
-  ) => {
-    const category =
-      item.category?.trim();
-
-    let tags = (item.tags || [])
-      .map((t) => t.trim())
-      .filter(Boolean);
-
-    if (
-      category &&
-      !tags.includes(category)
-    ) {
-      tags = [
-        category,
-        ...tags,
-      ];
-    }
-
-    tags = Array.from(
-      new Set(tags)
-    );
-
-    const newItem: PlannerItem = {
-      ...item,
-      id: `task_${Date.now()}`,
-      category:
-        category ||
-        tags[0] ||
-        'General',
-      tags,
-    };
-
-    const updated = [
-      newItem,
-      ...plannerItems,
-    ];
-
-    setPlannerItems(updated);
-
-    Storage.savePlannerItems(
-      updated
-    );
-  };
-
-  // ---------------------------------------------------------
-  // HABITS
-  // ---------------------------------------------------------
-
-  const handleToggleHabit = (
-    id: string
-  ) => {
-    const updated =
-      habits.map((habit) => {
-        if (habit.id !== id) {
-          return habit;
-        }
-
-        const nextState =
-          !habit.completedToday;
-
-        return {
-          ...habit,
-          completedToday:
-            nextState,
-          streak: nextState
-            ? habit.streak + 1
-            : Math.max(
-                0,
-                habit.streak - 1
-              ),
-        };
-      });
-
-    setHabits(updated);
-
-    Storage.saveHabits(
-      updated
-    );
-  };
-
-  // ---------------------------------------------------------
-  // MEMORY
-  // ---------------------------------------------------------
-
-  const handleAddMemory = (
-    content: string,
-    category: any
-  ) => {
-    const cleanContent =
-      content.trim();
-
-    if (!cleanContent) {
-      return;
-    }
-
-    const newMem: MemoryItem = {
-      id: `mem_${Date.now()}`,
-      content: cleanContent,
-      category,
-      createdAt:
-        new Date()
-          .toISOString()
-          .split('T')[0],
-    };
-
-    const updated = [
-      newMem,
-      ...memories,
-    ];
-
-    setMemories(updated);
-
-    Storage.saveMemories(
-      updated
-    );
-  };
-
-  const handleDeleteMemory = (
-    id: string
-  ) => {
-    const updated =
-      memories.filter(
-        (memory) =>
-          memory.id !== id
+      Storage.savePlannerItems(
+        updated
       );
-
-    setMemories(updated);
-
-    Storage.saveMemories(
-      updated
-    );
-  };
-
-  // ---------------------------------------------------------
-  // AI AGENT
-  // ---------------------------------------------------------
-
-  const handleSendMessage = async (
-    text: string
-  ) => {
-    const cleanText =
-      text.trim();
-
-    if (
-      !cleanText ||
-      isLoadingAI
-    ) {
-      return;
-    }
-
-    const userMsg: ChatMessage = {
-      id: `msg_u_${Date.now()}`,
-      role: 'user',
-      content: cleanText,
-      timestamp:
-        new Date().toLocaleTimeString(
-          [],
-          {
-            hour: '2-digit',
-            minute: '2-digit',
-          }
-        ),
     };
 
-    const nextHistory = [
-      ...chatHistory,
-      userMsg,
-    ];
+  const handleAddTask =
+    (
+      item: Omit<
+        PlannerItem,
+        'id'
+      >
+    ) => {
+      const category =
+        item.category?.trim();
 
-    setChatHistory(
-      nextHistory
-    );
-
-    Storage.saveChatHistory(
-      nextHistory
-    );
-
-    setIsLoadingAI(true);
-
-    const controller =
-      new AbortController();
-
-    const timeoutId =
-      window.setTimeout(() => {
-        controller.abort();
-      }, AI_TIMEOUT_MS);
-
-    try {
-      const recentHistory =
-        nextHistory
-          .slice(-MAX_HISTORY)
-          .map((message) => ({
-            role:
-              message.role,
-            content:
-              String(
-                message.content || ''
-              ).slice(
-                0,
-                1200
-              ),
-          }));
-
-      const recentMemories =
-        memories
-          .slice(
-            0,
-            MAX_MEMORY_ITEMS
+      let tags =
+        (item.tags || [])
+          .map((tag) =>
+            tag.trim()
           )
-          .map((memory) => ({
-            content:
-              String(
-                memory.content || ''
-              ).slice(
-                0,
-                MAX_MEMORY_LENGTH
-              ),
-          }));
+          .filter(Boolean);
 
-      const safeProfile = {
-        name:
-          user?.name || '',
+      if (
+        category &&
+        !tags.includes(
+          category
+        )
+      ) {
+        tags = [
+          category,
+          ...tags,
+        ];
+      }
 
-        preferredLanguage:
-          user?.preferredLanguage ||
-          'en',
+      tags = Array.from(
+        new Set(tags)
+      );
 
-        goals:
-          String(
-            user?.goals || ''
-          ).slice(
-            0,
-            500
+      const newItem:
+        PlannerItem = {
+        ...item,
+        id:
+          `task_${Date.now()}`,
+        category:
+          category ||
+          tags[0] ||
+          'General',
+        tags,
+      };
+
+      const updated = [
+        newItem,
+        ...plannerItems,
+      ];
+
+      setPlannerItems(
+        updated
+      );
+
+      Storage.savePlannerItems(
+        updated
+      );
+    };
+
+  // =========================================================
+  // HABITS
+  // =========================================================
+
+  const handleToggleHabit =
+    (
+      id: string
+    ) => {
+      const updated =
+        habits.map(
+          (habit) => {
+            if (
+              habit.id !== id
+            ) {
+              return habit;
+            }
+
+            const nextState =
+              !habit.completedToday;
+
+            return {
+              ...habit,
+              completedToday:
+                nextState,
+              streak:
+                nextState
+                  ? habit.streak +
+                    1
+                  : Math.max(
+                      0,
+                      habit.streak -
+                        1
+                    ),
+            };
+          }
+        );
+
+      setHabits(
+        updated
+      );
+
+      Storage.saveHabits(
+        updated
+      );
+    };
+
+  // =========================================================
+  // MEMORY
+  // =========================================================
+
+  const handleAddMemory =
+    (
+      content: string,
+      category: any
+    ) => {
+      const cleanContent =
+        content.trim();
+
+      if (
+        !cleanContent
+      ) {
+        return;
+      }
+
+      const newMemory:
+        MemoryItem = {
+        id:
+          `mem_${Date.now()}`,
+        content:
+          cleanContent,
+        category,
+        createdAt:
+          new Date()
+            .toISOString()
+            .split('T')[0],
+      };
+
+      const updated = [
+        newMemory,
+        ...memories,
+      ];
+
+      setMemories(
+        updated
+      );
+
+      Storage.saveMemories(
+        updated
+      );
+    };
+
+  const handleDeleteMemory =
+    (
+      id: string
+    ) => {
+      const updated =
+        memories.filter(
+          (memory) =>
+            memory.id !== id
+        );
+
+      setMemories(
+        updated
+      );
+
+      Storage.saveMemories(
+        updated
+      );
+    };
+
+  // =========================================================
+  // AI AGENT
+  // =========================================================
+
+  const handleSendMessage =
+    async (
+      text: string
+    ) => {
+      const cleanText =
+        text.trim();
+
+      if (
+        !cleanText ||
+        isLoadingAI
+      ) {
+        return;
+      }
+
+      const now =
+        Date.now();
+
+      const userMsg:
+        ChatMessage = {
+        id:
+          `msg_u_${now}`,
+        role:
+          'user',
+        content:
+          cleanText,
+        timestamp:
+          new Date().toLocaleTimeString(
+            [],
+            {
+              hour:
+                '2-digit',
+              minute:
+                '2-digit',
+            }
           ),
       };
 
-      const response =
-        await fetch(
-          '/api/agent',
-          {
-            method: 'POST',
+      const nextHistory = [
+        ...chatHistory,
+        userMsg,
+      ];
 
-            headers: {
-              'Content-Type':
-                'application/json',
-            },
+      setChatHistory(
+        nextHistory
+      );
 
-            signal:
-              controller.signal,
+      /**
+       * Local cache is updated immediately.
+       */
+      Storage.saveChatHistory(
+        nextHistory
+      );
 
-            body: JSON.stringify({
-              message:
-                cleanText.slice(
-                  0,
-                  MAX_MESSAGE_LENGTH
-                ),
+      setIsLoadingAI(
+        true
+      );
 
-              history:
-                recentHistory,
+      const controller =
+        new AbortController();
 
-              userProfile:
-                safeProfile,
-
-              memories:
-                recentMemories,
-            }),
-          }
+      const timeoutId =
+        window.setTimeout(
+          () => {
+            controller.abort();
+          },
+          AI_TIMEOUT_MS
         );
 
-      if (!response.ok) {
-        let serverMessage =
-          'AI Agent request failed.';
+      try {
+        const recentHistory =
+          nextHistory
+            .slice(
+              -MAX_HISTORY
+            )
+            .map(
+              (message) => ({
+                role:
+                  message.role,
+                content:
+                  String(
+                    message.content ||
+                      ''
+                  ).slice(
+                    0,
+                    1200
+                  ),
+              })
+            );
 
-        try {
-          const errorData =
-            await response.json();
+        const recentMemories =
+          memories
+            .slice(
+              0,
+              MAX_MEMORY_ITEMS
+            )
+            .map(
+              (memory) => ({
+                content:
+                  String(
+                    memory.content ||
+                      ''
+                  ).slice(
+                    0,
+                    MAX_MEMORY_LENGTH
+                  ),
+              })
+            );
 
-          serverMessage =
-            errorData?.error ||
-            errorData?.reply ||
-            serverMessage;
-        } catch {
-          // Ignore invalid JSON.
+        const safeProfile = {
+          name:
+            user?.name ||
+            '',
+
+          preferredLanguage:
+            user?.preferredLanguage ||
+            'en',
+
+          goals:
+            String(
+              user?.goals ||
+                ''
+            ).slice(
+              0,
+              500
+            ),
+        };
+
+        const response =
+          await fetch(
+            '/api/agent',
+            {
+              method:
+                'POST',
+
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+
+              signal:
+                controller.signal,
+
+              body:
+                JSON.stringify({
+                  message:
+                    cleanText.slice(
+                      0,
+                      MAX_MESSAGE_LENGTH
+                    ),
+
+                  history:
+                    recentHistory,
+
+                  userProfile:
+                    safeProfile,
+
+                  memories:
+                    recentMemories,
+                }),
+            }
+          );
+
+        if (!response.ok) {
+          let serverMessage =
+            'AI Agent request failed.';
+
+          try {
+            const errorData =
+              await response.json();
+
+            serverMessage =
+              errorData?.error ||
+              errorData?.reply ||
+              serverMessage;
+          } catch {
+            // Ignore invalid JSON.
+          }
+
+          throw new Error(
+            serverMessage
+          );
         }
 
-        throw new Error(
-          serverMessage
-        );
-      }
+        const data =
+          await response.json();
 
-      const data =
-        await response.json();
+        const agentReply =
+          typeof data.reply ===
+            'string' &&
+          data.reply.trim()
+            ? data.reply.trim()
+            : 'I processed your request.';
 
-      const agentReply =
-        typeof data.reply ===
-          'string' &&
-        data.reply.trim()
-          ? data.reply.trim()
-          : 'I processed your request.';
-
-      const assistantMsg:
-        ChatMessage = {
-          id: `msg_a_${Date.now()}`,
+        const assistantMsg:
+          ChatMessage = {
+          id:
+            `msg_a_${Date.now()}`,
 
           role:
             'assistant',
@@ -849,8 +1287,10 @@ export default function App() {
             new Date().toLocaleTimeString(
               [],
               {
-                hour: '2-digit',
-                minute: '2-digit',
+                hour:
+                  '2-digit',
+                minute:
+                  '2-digit',
               }
             ),
 
@@ -859,85 +1299,90 @@ export default function App() {
             null,
         };
 
-      const finalHistory = [
-        ...nextHistory,
-        assistantMsg,
-      ];
+        const finalHistory = [
+          ...nextHistory,
+          assistantMsg,
+        ];
 
-      setChatHistory(
-        finalHistory
-      );
-
-      Storage.saveChatHistory(
-        finalHistory
-      );
-
-      if (
-        data.newMemory &&
-        typeof data.newMemory ===
-          'string' &&
-        data.newMemory.trim()
-      ) {
-        handleAddMemory(
-          data.newMemory.trim(),
-          'fact'
+        setChatHistory(
+          finalHistory
         );
-      }
 
-      if (data.detectedAction) {
-        setPendingAction(
-          data.detectedAction
-        );
-      }
-
-      if (
-        data.usedTool &&
-        data.tool
-      ) {
-        console.log(
-          'Agent tool used:',
-          data.tool
+        Storage.saveChatHistory(
+          finalHistory
         );
 
         if (
-          data.toolResult
+          data.newMemory &&
+          typeof data.newMemory ===
+            'string' &&
+          data.newMemory.trim()
         ) {
-          console.log(
-            'Tool result:',
-            data.toolResult
+          handleAddMemory(
+            data.newMemory.trim(),
+            'fact'
           );
         }
-      }
-    } catch (error: any) {
-      console.error(
-        'Nodysom AI Agent error:',
-        error
-      );
 
-      let errorText =
-        'Nodysom AI is temporarily unavailable. Please try again.';
+        if (
+          data.detectedAction
+        ) {
+          setPendingAction(
+            data.detectedAction
+          );
+        }
 
-      if (
-        error?.name ===
-        'AbortError'
-      ) {
-        errorText =
-          'The AI request took too long. Please try again.';
-      } else if (
-        !isOnline
-      ) {
-        errorText =
-          'You are offline. Please check your internet connection and try again.';
-      } else if (
-        error?.message
-      ) {
-        errorText =
-          error.message;
-      }
+        if (
+          data.usedTool &&
+          data.tool
+        ) {
+          console.log(
+            'Agent tool used:',
+            data.tool
+          );
 
-      const errorMsg:
-        ChatMessage = {
-          id: `msg_err_${Date.now()}`,
+          if (
+            data.toolResult
+          ) {
+            console.log(
+              'Tool result:',
+              data.toolResult
+            );
+          }
+        }
+      } catch (
+        error: any
+      ) {
+        console.error(
+          'Nodysom AI Agent error:',
+          error
+        );
+
+        let errorText =
+          'Nodysom AI is temporarily unavailable. Please try again.';
+
+        if (
+          error?.name ===
+          'AbortError'
+        ) {
+          errorText =
+            'The AI request took too long. Please try again.';
+        } else if (
+          !isOnline
+        ) {
+          errorText =
+            'You are offline. Please check your internet connection and try again.';
+        } else if (
+          error?.message
+        ) {
+          errorText =
+            error.message;
+        }
+
+        const errorMsg:
+          ChatMessage = {
+          id:
+            `msg_err_${Date.now()}`,
 
           role:
             'assistant',
@@ -949,46 +1394,51 @@ export default function App() {
             new Date().toLocaleTimeString(
               [],
               {
-                hour: '2-digit',
-                minute: '2-digit',
+                hour:
+                  '2-digit',
+                minute:
+                  '2-digit',
               }
             ),
         };
 
-      const errorHistory = [
-        ...nextHistory,
-        errorMsg,
-      ];
+        const errorHistory = [
+          ...nextHistory,
+          errorMsg,
+        ];
 
-      setChatHistory(
-        errorHistory
-      );
+        setChatHistory(
+          errorHistory
+        );
 
-      Storage.saveChatHistory(
-        errorHistory
-      );
-    } finally {
-      window.clearTimeout(
-        timeoutId
-      );
+        Storage.saveChatHistory(
+          errorHistory
+        );
+      } finally {
+        window.clearTimeout(
+          timeoutId
+        );
 
-      setIsLoadingAI(false);
-    }
-  };
+        setIsLoadingAI(
+          false
+        );
+      }
+    };
 
-  // ---------------------------------------------------------
+  // =========================================================
   // SMART ACTION
-  // ---------------------------------------------------------
+  // =========================================================
 
-  const handleConfirmSmartAction = (
-    finalAction: SmartAction
-  ) => {
-    const category =
-      finalAction.category ||
-      'General';
+  const handleConfirmSmartAction =
+    (
+      finalAction: SmartAction
+    ) => {
+      const category =
+        finalAction.category ||
+        'General';
 
-    const newItem:
-      PlannerItem = {
+      const newItem:
+        PlannerItem = {
         id:
           `action_${Date.now()}`,
 
@@ -1024,72 +1474,74 @@ export default function App() {
         ],
       };
 
-    const updated = [
-      newItem,
-      ...plannerItems,
-    ];
+      const updated = [
+        newItem,
+        ...plannerItems,
+      ];
 
-    setPlannerItems(
-      updated
-    );
+      setPlannerItems(
+        updated
+      );
 
-    Storage.savePlannerItems(
-      updated
-    );
+      Storage.savePlannerItems(
+        updated
+      );
 
-    setPendingAction(
-      null
-    );
+      setPendingAction(
+        null
+      );
 
-    const confirmMsg:
-      ChatMessage = {
-      id:
-        `msg_c_${Date.now()}`,
+      const confirmMsg:
+        ChatMessage = {
+        id:
+          `msg_c_${Date.now()}`,
 
-      role:
-        'assistant',
+        role:
+          'assistant',
 
-      content:
-        `Action confirmed: Added "${finalAction.title}" to your ${
-          finalAction.type ===
-          'REMINDER'
-            ? 'Reminders'
-            : 'Daily Planner'
-        } for ${
-          finalAction.date ||
-          'Today'
-        } at ${
-          finalAction.time ||
-          '09:00 AM'
-        }.`,
+        content:
+          `Action confirmed: Added "${finalAction.title}" to your ${
+            finalAction.type ===
+            'REMINDER'
+              ? 'Reminders'
+              : 'Daily Planner'
+          } for ${
+            finalAction.date ||
+            'Today'
+          } at ${
+            finalAction.time ||
+            '09:00 AM'
+          }.`,
 
-      timestamp:
-        new Date().toLocaleTimeString(
-          [],
-          {
-            hour: '2-digit',
-            minute: '2-digit',
-          }
-        ),
+        timestamp:
+          new Date().toLocaleTimeString(
+            [],
+            {
+              hour:
+                '2-digit',
+              minute:
+                '2-digit',
+            }
+          ),
+      };
+
+      const finalHistory = [
+        ...chatHistory,
+        confirmMsg,
+      ];
+
+      setChatHistory(
+        finalHistory
+      );
+
+      Storage.saveChatHistory(
+        finalHistory
+      );
     };
 
-    const finalHistory = [
-      ...chatHistory,
-      confirmMsg,
-    ];
-
-    setChatHistory(
-      finalHistory
-    );
-
-    Storage.saveChatHistory(
-      finalHistory
-    );
-  };
-
-  // ---------------------------------------------------------
+  // =========================================================
   // ONBOARDING
-  // ---------------------------------------------------------
+  // =========================================================
 
   const handleCompleteOnboarding =
     (
@@ -1101,54 +1553,75 @@ export default function App() {
         updatedProfile
       );
 
-      localStorage.setItem(
-        'lifeos_onboarding_completed',
-        'true'
-      );
+      try {
+        localStorage.setItem(
+          ONBOARDING_KEY,
+          'true'
+        );
+      } catch {
+        // Ignore storage errors.
+      }
 
       setIsOnboardingOpen(
         false
       );
 
-      if (initialPrompt) {
+      if (
+        initialPrompt
+      ) {
         handleSendMessage(
           initialPrompt
         );
       }
     };
 
-  // ---------------------------------------------------------
-  // CLEAR DATA
-  // ---------------------------------------------------------
+  // =========================================================
+  // CLEAR LOCAL DATA
+  // =========================================================
 
   const handleClearAllData =
     () => {
       Storage.clearAllData();
 
+      const resetUser =
+        Storage.getUser();
+
+      const resetMemories =
+        Storage.getMemories();
+
+      const resetPlanner =
+        Storage.getPlannerItems();
+
+      const resetHabits =
+        Storage.getHabits();
+
+      const resetChat =
+        Storage.getChatHistory();
+
       setUser(
-        Storage.getUser()
+        resetUser
       );
 
       setMemories(
-        Storage.getMemories()
+        resetMemories
       );
 
       setPlannerItems(
-        Storage.getPlannerItems()
+        resetPlanner
       );
 
       setHabits(
-        Storage.getHabits()
+        resetHabits
       );
 
       setChatHistory(
-        Storage.getChatHistory()
+        resetChat
       );
     };
 
-  // ---------------------------------------------------------
+  // =========================================================
   // UI
-  // ---------------------------------------------------------
+  // =========================================================
 
   return (
     <div
@@ -1259,8 +1732,12 @@ export default function App() {
           {currentTab ===
             'learn' && (
             <LearnView
-              onOpenLesson={(topic) => {
-                setCurrentTab('home');
+              onOpenLesson={(
+                topic
+              ) => {
+                setCurrentTab(
+                  'home'
+                );
 
                 handleSendMessage(
                   `Teach me about ${topic}. Explain it step by step in a simple and practical way.`
@@ -1275,7 +1752,9 @@ export default function App() {
               plannerItems={
                 plannerItems
               }
-              habits={habits}
+              habits={
+                habits
+              }
               onToggleTask={
                 handleToggleTask
               }
@@ -1310,27 +1789,21 @@ export default function App() {
               onClearAllData={
                 handleClearAllData
               }
-
               cloudEnabled={
                 isSupabaseConfigured
               }
-
               cloudEmail={
                 cloudEmail
               }
-
               cloudBusy={
                 cloudBusy
               }
-
               onSignIn={
                 handleCloudSignIn
               }
-
               onSignUp={
                 handleCloudSignUp
               }
-
               onSignOut={
                 handleCloudSignOut
               }
@@ -1343,7 +1816,9 @@ export default function App() {
             currentTab
           }
           onSelectTab={(tab) =>
-            setCurrentTab(tab)
+            setCurrentTab(
+              tab
+            )
           }
           onOpenVoice={() =>
             setIsVoiceOpen(
