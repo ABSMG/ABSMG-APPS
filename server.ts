@@ -523,6 +523,10 @@ async function callGemini(
    OPENROUTER FALLBACK
 ========================================================= */
 
+/* =========================================================
+   OPENROUTER FALLBACK
+========================================================= */
+
 async function callOpenRouter(
   messages: ChatMessage[],
   options?: {
@@ -545,23 +549,16 @@ async function callOpenRouter(
     );
   }
 
-  const body: Record<
-    string,
-    unknown
-  > = {
+  const body: Record<string, unknown> = {
     model:
       OPENROUTER_MODEL,
 
-    messages:
-      messages.map(
-        (message) => ({
-          role:
-            message.role,
-
-          content:
-            message.content,
-        })
-      ),
+    messages: messages.map(
+      (message) => ({
+        role: message.role,
+        content: message.content,
+      })
+    ),
 
     max_tokens:
       options?.maxTokens || 4096,
@@ -576,7 +573,7 @@ async function callOpenRouter(
   const response =
     await withTimeout(
       fetch(
-        OPENROUTER_URL,
+        "https://openrouter.ai/api/v1/chat/completions",
         {
           method: "POST",
 
@@ -584,17 +581,17 @@ async function callOpenRouter(
             Authorization:
               `Bearer ${apiKey}`,
 
-            "Content-Type":
-              "application/json",
-
             "HTTP-Referer":
               String(
                 process.env.APP_URL ||
-                  "https://absmg-apps.onrender.com"
+                "https://absmg-apps.onrender.com"
               ),
 
             "X-Title":
               "Nodysom AI",
+
+            "Content-Type":
+              "application/json",
           },
 
           body:
@@ -607,38 +604,31 @@ async function callOpenRouter(
   const rawBody =
     await response.text();
 
-  let payload: any =
-    null;
+  let data: any = null;
 
   try {
-    payload =
-      JSON.parse(
-        rawBody
-      );
+    data =
+      JSON.parse(rawBody);
   } catch {
-    payload =
-      null;
+    data = null;
   }
 
   if (!response.ok) {
-    const providerMessage =
+    const message =
       cleanText(
-        payload?.error?.message ||
-          payload?.message ||
-          rawBody,
+        data?.error?.message ||
+        data?.message ||
+        rawBody,
         1000
       );
 
     throw new Error(
-      `OpenRouter API error (${response.status}): ${providerMessage}`
+      `OpenRouter API error (${response.status}): ${message}`
     );
   }
 
   const content =
-    payload
-      ?.choices?.[0]
-      ?.message
-      ?.content;
+    data?.choices?.[0]?.message?.content;
 
   const text =
     cleanText(
