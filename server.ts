@@ -37,22 +37,26 @@ const PORT =
 ========================================================= */
 
 /*
- * IMPORTANT PERFORMANCE CHANGE
+ * PERFORMANCE ARCHITECTURE
  *
- * The old timeout was 120 seconds.
+ * Gemini
+ *    ↓
+ * Fast timeout / quota detection
+ *    ↓
+ * OpenRouter fallback
  *
- * That meant:
- *
- * Gemini could wait 120s
- *       ↓
- * OpenRouter could then wait another 120s
- *
- * The new architecture fails over much faster.
+ * This prevents the application from waiting several
+ * minutes before switching providers.
  */
 
-const AI_TIMEOUT_MS = 25000;
+const AI_TIMEOUT_MS = 15000;
 
-const SEARCH_TIMEOUT_MS = 20000;
+const SEARCH_TIMEOUT_MS = 18000;
+
+const OPENROUTER_TIMEOUT_MS = 18000;
+
+const GEMINI_COOLDOWN_MS =
+  15 * 60 * 1000;
 
 const GEMINI_MODEL =
   String(
@@ -89,10 +93,8 @@ const RATE_LIMIT_WINDOW_MS =
   60 * 1000;
 
 /*
- * Smaller outputs are generally faster.
- *
- * These are defaults only. Existing endpoint
- * features remain unchanged.
+ * Smaller output limits normally reduce generation time
+ * while preserving enough room for useful responses.
  */
 
 const DEFAULT_MAX_TOKENS = 2048;
@@ -102,6 +104,53 @@ const SEARCH_MAX_TOKENS = 2500;
 const TRANSLATION_MAX_TOKENS = 1200;
 
 const SCHEDULE_MAX_TOKENS = 1800;
+
+/* =========================================================
+   GEMINI AVAILABILITY / COOLDOWN
+========================================================= */
+
+/*
+ * When Gemini returns quota/rate-limit errors, repeatedly
+ * calling it wastes time.
+ *
+ * Instead, Nodysom temporarily skips Gemini and sends the
+ * request directly to OpenRouter.
+ */
+
+let geminiCooldownUntil = 0;
+
+function isGeminiCoolingDown(): boolean {
+  return (
+    Date.now() <
+    geminiCooldownUntil
+  );
+}
+
+function markGeminiTemporarilyUnavailable(
+  error: unknown
+): void {
+  const message =
+    error instanceof Error
+      ? error.message
+      : String(error);
+
+  const isRateLimit =
+    /429|rate.?limit|quota|resource.?exhausted|too.?many.?requests|card_required/i.test(
+      message
+    );
+
+  if (isRateLimit) {
+    geminiCooldownUntil =
+      Date.now() +
+      GEMINI_COOLDOWN_MS;
+
+    console.warn(
+      `[Nodysom AI] Gemini temporarily disabled for ${Math.round(
+        GEMINI_COOLDOWN_MS / 60000
+      )} minutes because of rate/quota limitation.`
+    );
+  }
+}
 
 /* =========================================================
    BODY PARSER
@@ -247,6 +296,12 @@ interface ChatMessage {
 
 interface GeminiResponse {
   text: string;
+
+  /*
+   * Keep the raw provider response so Search can recover
+   * URLs/citations that may not appear inside plain text.
+   */
+  raw?: unknown;
 }
 
 /* =========================================================
@@ -281,8 +336,7 @@ function safeJsonStringify(
  *
  * This protects SDK requests.
  *
- * The SDK itself also receives the same timeout where
- * supported.
+ * The Google SDK also receives its own timeout.
  */
 
 async function withTimeout<T>(
@@ -320,10 +374,12 @@ async function withTimeout<T>(
 }
 
 /*
- * Fetch timeout with real cancellation.
+ * REAL fetch cancellation.
  *
- * This is important for OpenRouter because
- * Promise.race alone does NOT cancel fetch().
+ * Promise.race alone does not stop an underlying fetch.
+ *
+ * AbortController actually cancels the OpenRouter
+ * network request when the timeout is reached.
  */
 
 async function fetchWithTimeout(
@@ -492,6 +548,7 @@ async function callGemini(
   options?: {
     json?: boolean;
     maxTokens?: number;
+    timeoutMs?: number;
   }
 ): Promise<GeminiResponse> {
   const apiKey =
@@ -545,6 +602,10 @@ async function callGemini(
     conversationText ||
     "Hello";
 
+  const timeoutMs =
+    options?.timeoutMs ||
+    AI_TIMEOUT_MS;
+
   const interactionRequest: any = {
     model:
       GEMINI_MODEL,
@@ -557,8 +618,7 @@ async function callGemini(
         DEFAULT_MAX_TOKENS,
 
       /*
-       * Low thinking is intentional for
-       * faster normal assistant responses.
+       * Low thinking keeps normal responses responsive.
        */
       thinking_level:
         "low",
@@ -587,10 +647,10 @@ async function callGemini(
         interactionRequest,
         {
           timeout:
-            AI_TIMEOUT_MS,
+            timeoutMs,
         }
       ),
-      AI_TIMEOUT_MS
+      timeoutMs
     );
 
   const text =
@@ -607,6 +667,9 @@ async function callGemini(
 
   return {
     text,
+
+    raw:
+      interaction,
   };
 }
 
@@ -647,6 +710,7 @@ async function callOpenRouter(
         (message) => ({
           role:
             message.role,
+
           content:
             message.content,
         })
@@ -673,7 +737,7 @@ async function callOpenRouter(
 
   const timeoutMs =
     options?.timeoutMs ||
-    AI_TIMEOUT_MS;
+    OPENROUTER_TIMEOUT_MS;
 
   const response =
     await fetchWithTimeout(
@@ -749,6 +813,17 @@ async function callOpenRouter(
               : item?.text || ""
         )
         .join("\n");
+  } else if (
+    content &&
+    typeof content === "object"
+  ) {
+    text =
+      cleanText(
+        (content as any).text ||
+        (content as any).content ||
+        "",
+        30000
+      );
   }
 
   text =
@@ -765,6 +840,13 @@ async function callOpenRouter(
 
   return {
     text,
+
+    /*
+     * Keep complete OpenRouter response for citations,
+     * annotations and source extraction.
+     */
+    raw:
+      data,
   };
 }
 
@@ -777,22 +859,29 @@ async function callAI(
   options?: {
     json?: boolean;
     maxTokens?: number;
+    timeoutMs?: number;
   }
 ): Promise<GeminiResponse> {
   let geminiError =
     "Gemini is unavailable.";
 
+  const requestedTimeout =
+    options?.timeoutMs ||
+    AI_TIMEOUT_MS;
+
   /*
-   * PRIMARY
+   * ================================================
+   * PRIMARY: GEMINI
+   * ================================================
    *
-   * Gemini gets only 25 seconds.
-   *
-   * If Gemini is rate-limited, times out,
-   * or otherwise fails, OpenRouter starts
-   * immediately.
+   * Skip Gemini temporarily when we already know it
+   * is rate-limited.
    */
 
-  if (hasGeminiKey()) {
+  if (
+    hasGeminiKey() &&
+    !isGeminiCoolingDown()
+  ) {
     try {
       console.log(
         "[Nodysom AI] Trying Gemini..."
@@ -800,7 +889,12 @@ async function callAI(
 
       return await callGemini(
         messages,
-        options
+        {
+          ...options,
+
+          timeoutMs:
+            requestedTimeout,
+        }
       );
 
     } catch (error) {
@@ -809,18 +903,43 @@ async function callAI(
           ? error.message
           : String(error);
 
+      markGeminiTemporarilyUnavailable(
+        error
+      );
+
       console.warn(
         "[Nodysom AI] Gemini failed. Trying OpenRouter fallback.",
         geminiError
       );
     }
+  } else if (
+    hasGeminiKey() &&
+    isGeminiCoolingDown()
+  ) {
+    const remaining =
+      Math.max(
+        0,
+        geminiCooldownUntil -
+          Date.now()
+      );
+
+    console.log(
+      `[Nodysom AI] Gemini cooldown active. Skipping Gemini for another ${Math.ceil(
+        remaining / 60000
+      )} minute(s).`
+    );
+
+    geminiError =
+      "Gemini temporarily skipped because of a previous rate/quota limitation.";
   } else {
     geminiError =
       "GEMINI_API_KEY is not configured.";
   }
 
   /*
-   * FALLBACK
+   * ================================================
+   * FALLBACK: OPENROUTER
+   * ================================================
    */
 
   if (hasOpenRouterKey()) {
@@ -835,7 +954,8 @@ async function callAI(
           ...options,
 
           timeoutMs:
-            AI_TIMEOUT_MS,
+            options?.timeoutMs ||
+            OPENROUTER_TIMEOUT_MS,
         }
       );
 
@@ -928,7 +1048,46 @@ function parseModelJson(
       return parsed as JsonRecord;
     }
   } catch {
-    return null;
+    // Continue.
+  }
+
+  /*
+   * Attempt to recover JSON if the model wrapped it
+   * with additional text.
+   */
+
+  const firstBrace =
+    cleaned.indexOf("{");
+
+  const lastBrace =
+    cleaned.lastIndexOf("}");
+
+  if (
+    firstBrace >= 0 &&
+    lastBrace > firstBrace
+  ) {
+    const possibleJson =
+      cleaned.slice(
+        firstBrace,
+        lastBrace + 1
+      );
+
+    try {
+      const parsed =
+        JSON.parse(
+          possibleJson
+        );
+
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed)
+      ) {
+        return parsed as JsonRecord;
+      }
+    } catch {
+      return null;
+    }
   }
 
   return null;
@@ -1173,12 +1332,11 @@ If another local tool is required, return a toolCall instead.
         {
           json: true,
 
-          /*
-           * 2048 is enough for most agent JSON
-           * responses and reduces generation time.
-           */
           maxTokens:
             DEFAULT_MAX_TOKENS,
+
+          timeoutMs:
+            AI_TIMEOUT_MS,
         }
       );
 
@@ -1486,8 +1644,16 @@ app.get(
       tagline:
         "Plan Your Day. Live Smarter.",
 
+      website:
+        true,
+
+      production:
+        process.env.NODE_ENV ===
+        "production",
+
       aiProvider:
-        hasUsableGeminiKey
+        hasUsableGeminiKey &&
+        !isGeminiCoolingDown()
           ? "Google Gemini"
           : hasUsableOpenRouterKey
             ? "OpenRouter"
@@ -1511,12 +1677,28 @@ app.get(
       hasOpenRouterKey:
         hasUsableOpenRouterKey,
 
+      geminiCooldown:
+        {
+          active:
+            isGeminiCoolingDown(),
+
+          remainingMs:
+            Math.max(
+              0,
+              geminiCooldownUntil -
+                Date.now()
+            ),
+        },
+
       performance: {
         aiTimeoutMs:
           AI_TIMEOUT_MS,
 
         searchTimeoutMs:
           SEARCH_TIMEOUT_MS,
+
+        openRouterTimeoutMs:
+          OPENROUTER_TIMEOUT_MS,
 
         defaultMaxTokens:
           DEFAULT_MAX_TOKENS,
@@ -1525,7 +1707,7 @@ app.get(
           SEARCH_MAX_TOKENS,
 
         architecture:
-          "Fast Gemini primary + OpenRouter fallback",
+          "Fast Gemini primary + OpenRouter fallback + quota cooldown + real request cancellation",
       },
 
       search:
@@ -1593,6 +1775,26 @@ app.get(
           "time",
           "text_stats",
         ],
+      },
+
+      endpoints: {
+        agent:
+          "/api/agent",
+
+        assistant:
+          "/api/ai/assistant",
+
+        search:
+          "/api/ai/search",
+
+        translate:
+          "/api/ai/translate",
+
+        smartSchedule:
+          "/api/ai/smart-schedule",
+
+        health:
+          "/api/health",
       },
     });
   }
@@ -1698,6 +1900,7 @@ app.post(
 
       return res.json({
         ...result,
+
         latency,
       });
 
@@ -2073,8 +2276,8 @@ function extractUrlsFromValue(
       Object.entries(object)
     ) {
       /*
-       * Avoid treating secret/config metadata
-       * as sources.
+       * Never search through sensitive request metadata
+       * looking for URLs.
        */
       if (
         key === "apiKey" ||
@@ -2116,6 +2319,62 @@ function extractSearchSources(
   return Array.from(
     found.values()
   ).slice(0, 10);
+}
+
+/* =========================================================
+   SEARCH FACT CLEANING
+========================================================= */
+
+function cleanSearchFact(
+  line: string
+): string {
+  return line
+    .replace(
+      /^#{1,6}\s*/,
+      ""
+    )
+    .replace(
+      /^[-*•]\s*/,
+      ""
+    )
+    .replace(
+      /^\d+[.)]\s*/,
+      ""
+    )
+    .replace(
+      /^\*\*(.*?)\*\*$/,
+      "$1"
+    )
+    .trim();
+}
+
+function isSearchHeading(
+  line: string
+): boolean {
+  const cleaned =
+    line
+      .replace(
+        /^#{1,6}\s*/,
+        ""
+      )
+      .replace(
+        /[*_`]/g,
+        ""
+      )
+      .trim();
+
+  if (!cleaned) {
+    return true;
+  }
+
+  return (
+    /^(summary|quick overview|key facts|verified facts|sources|uncertainties|estimates|suggested actions|bottom line|conclusion)$/i.test(
+      cleaned
+    ) ||
+    /^(\d+[\s.)-]|section\s+\d+)/i.test(
+      cleaned
+    )
+  );
 }
 
 /* =========================================================
@@ -2173,7 +2432,8 @@ Instructions:
    cannot be verified.
 6. Answer in the requested language.
 7. Keep the answer useful and reasonably concise.
-8. Include the important facts directly in the answer.
+8. Include important facts directly in the answer.
+9. Do not use unnecessary introductions.
 `;
 
   const interaction =
@@ -2221,11 +2481,6 @@ Instructions:
     );
   }
 
-  /*
-   * Search citations can appear in different parts
-   * of the Interactions API response.
-   */
-
   const sources =
     extractSearchSources(
       interaction
@@ -2233,6 +2488,7 @@ Instructions:
 
   return {
     summary,
+
     sources,
   };
 }
@@ -2317,10 +2573,6 @@ Rules:
           },
         ],
 
-        /*
-         * Search gets a shorter timeout than
-         * normal AI requests.
-         */
         timeoutMs:
           SEARCH_TIMEOUT_MS,
       }
@@ -2338,20 +2590,51 @@ Rules:
   }
 
   /*
-   * OpenRouter citations may exist in annotations
-   * outside the text returned by the current wrapper.
-   *
-   * We still recover direct URLs from the response.
+   * Search both the visible text and the complete
+   * provider response. This improves source recovery.
    */
 
-  const sources =
+  const textSources =
     extractSearchSources(
       summary
     );
 
+  const rawSources =
+    extractSearchSources(
+      response.raw
+    );
+
+  const sourceMap =
+    new Map<
+      string,
+      SearchSource
+    >();
+
+  for (
+    const source of [
+      ...rawSources,
+      ...textSources,
+    ]
+  ) {
+    if (
+      !sourceMap.has(
+        source.url
+      )
+    ) {
+      sourceMap.set(
+        source.url,
+        source
+      );
+    }
+  }
+
   return {
     summary,
-    sources,
+
+    sources:
+      Array.from(
+        sourceMap.values()
+      ).slice(0, 10),
   };
 }
 
@@ -2366,28 +2649,75 @@ function buildSearchResult(
   provider: string,
   latency: number
 ): SearchResultPayload {
-  const verifiedFacts =
+  /*
+   * Convert the model's Markdown into clean facts.
+   *
+   * This prevents SearchView's Key Facts section from
+   * simply repeating headings such as:
+   *
+   * ### 1. Cars
+   *
+   * or:
+   *
+   * **Quick Overview**
+   */
+
+  const lines =
     summary
       .split(/\n+/)
       .map(
         (line) =>
-          line
-            .replace(
-              /^[-*•]\s*/,
-              ""
-            )
-            .replace(
-              /^\d+[.)]\s*/,
-              ""
-            )
-            .trim()
+          cleanSearchFact(
+            line
+          )
       )
+      .filter(Boolean);
+
+  const verifiedFacts =
+    lines
       .filter(
         (line) =>
+          !isSearchHeading(
+            line
+          ) &&
           line.length > 30 &&
           line.length < 600
       )
       .slice(0, 8);
+
+  /*
+   * If the model returned one large paragraph instead of
+   * bullets, extract useful sentences as a fallback.
+   */
+
+  if (
+    verifiedFacts.length ===
+    0
+  ) {
+    const fallbackFacts =
+      summary
+        .replace(
+          /\s+/g,
+          " "
+        )
+        .split(
+          /(?<=[.!?])\s+/
+        )
+        .map(
+          (sentence) =>
+            sentence.trim()
+        )
+        .filter(
+          (sentence) =>
+            sentence.length > 40 &&
+            sentence.length < 600
+        )
+        .slice(0, 8);
+
+    verifiedFacts.push(
+      ...fallbackFacts
+    );
+  }
 
   return {
     query,
@@ -2452,7 +2782,10 @@ app.post(
        * ================================================
        */
 
-      if (hasGeminiKey()) {
+      if (
+        hasGeminiKey() &&
+        !isGeminiCoolingDown()
+      ) {
         try {
           console.log(
             "[Nodysom Search] Trying Gemini Google Search..."
@@ -2483,6 +2816,10 @@ app.post(
           );
 
         } catch (geminiError) {
+          markGeminiTemporarilyUnavailable(
+            geminiError
+          );
+
           console.warn(
             "[Nodysom Search] Gemini web search failed. Trying OpenRouter.",
             geminiError instanceof Error
@@ -2490,6 +2827,13 @@ app.post(
               : geminiError
           );
         }
+      } else if (
+        hasGeminiKey() &&
+        isGeminiCoolingDown()
+      ) {
+        console.log(
+          "[Nodysom Search] Gemini cooldown active. Going directly to OpenRouter."
+        );
       }
 
       /*
@@ -2726,6 +3070,9 @@ Rules:
 
             maxTokens:
               TRANSLATION_MAX_TOKENS,
+
+            timeoutMs:
+              AI_TIMEOUT_MS,
           }
         );
 
@@ -2972,6 +3319,9 @@ ${prompt}
 
             maxTokens:
               SCHEDULE_MAX_TOKENS,
+
+            timeoutMs:
+              AI_TIMEOUT_MS,
           }
         );
 
@@ -3135,7 +3485,14 @@ async function startServer() {
 
     app.use(
       express.static(
-        distPath
+        distPath,
+        {
+          maxAge:
+            "1d",
+
+          etag:
+            true,
+        }
       )
     );
 
@@ -3206,11 +3563,25 @@ async function startServer() {
       );
 
       console.log(
+        `[Nodysom AI] OpenRouter timeout: ${OPENROUTER_TIMEOUT_MS}ms`
+      );
+
+      console.log(
+        `[Nodysom AI] Gemini cooldown: ${Math.round(
+          GEMINI_COOLDOWN_MS / 60000
+        )} minutes`
+      );
+
+      console.log(
         `[Nodysom Search] Primary: Gemini Google Search`
       );
 
       console.log(
         `[Nodysom Search] Fallback: OpenRouter Web Search`
+      );
+
+      console.log(
+        `[Nodysom AI] Official website mode: enabled`
       );
     }
   );
