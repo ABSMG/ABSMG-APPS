@@ -1956,31 +1956,62 @@ export default function App() {
   const handleExportAllData =
     useCallback(
       async () => {
+        /**
+         * IMPORTANT:
+         *
+         * This function is now the ONLY exporter used by
+         * the ProfileView Export My Data button.
+         *
+         * We intentionally DO NOT call
+         * Storage.exportAllDataJSON() here.
+         *
+         * That old function was causing the application to
+         * return the older local-only export format.
+         */
+
         try {
-          /**
-           * Always start with local data.
-           * This guarantees export still works when:
-           * - user is offline
-           * - Supabase is unavailable
-           * - user is not signed in
-           */
+          // =================================================
+          // ALWAYS START WITH CURRENT LOCAL DATA
+          // =================================================
+
           const localData =
             latestDataRef.current;
 
-          let exportUser =
+          let exportUser:
+            UserProfile =
             localData.user;
 
-          let exportMemories =
-            localData.memories;
+          let exportMemories:
+            MemoryItem[] =
+            Array.isArray(
+              localData.memories
+            )
+              ? localData.memories
+              : [];
 
-          let exportPlanner =
-            localData.plannerItems;
+          let exportPlanner:
+            PlannerItem[] =
+            Array.isArray(
+              localData.plannerItems
+            )
+              ? localData.plannerItems
+              : [];
 
-          let exportHabits =
-            localData.habits;
+          let exportHabits:
+            HabitItem[] =
+            Array.isArray(
+              localData.habits
+            )
+              ? localData.habits
+              : [];
 
-          let exportChat =
-            localData.chatHistory;
+          let exportChat:
+            ChatMessage[] =
+            Array.isArray(
+              localData.chatHistory
+            )
+              ? localData.chatHistory
+              : [];
 
           let source:
             | 'local'
@@ -2037,22 +2068,19 @@ export default function App() {
                 // -------------------------------------------
 
                 exportUser = {
-                  ...cloudData.user,
-                  ...localData.user,
+                  ...(cloudData.user || {}),
+                  ...(localData.user || {}),
 
-                  /**
-                   * Keep authenticated cloud identity when
-                   * available.
-                   */
                   id:
                     cloudData.user?.id ||
-                    localData.user.id ||
+                    localData.user?.id ||
                     cloudUserId,
 
                   email:
                     cloudEmail ||
                     cloudData.user?.email ||
-                    localData.user.email,
+                    localData.user?.email ||
+                    '',
                 };
 
 
@@ -2063,7 +2091,7 @@ export default function App() {
                 exportMemories =
                   mergeById(
                     cloudMemories,
-                    localData.memories
+                    exportMemories
                   );
 
 
@@ -2074,7 +2102,7 @@ export default function App() {
                 exportPlanner =
                   mergeById(
                     cloudPlanner,
-                    localData.plannerItems
+                    exportPlanner
                   );
 
 
@@ -2085,7 +2113,7 @@ export default function App() {
                 exportHabits =
                   mergeById(
                     cloudHabits,
-                    localData.habits
+                    exportHabits
                   );
 
 
@@ -2096,29 +2124,36 @@ export default function App() {
                 /**
                  * IMPORTANT:
                  *
-                 * We deliberately use the export-specific
-                 * merge so cloud chat is NOT reduced to the
-                 * normal 200-message application limit.
+                 * Do NOT use mergeChatHistory() here because
+                 * that function intentionally applies the
+                 * application's 200-message limit.
+                 *
+                 * Export uses the complete merge instead.
                  */
                 exportChat =
                   mergeChatHistoryForExport(
                     cloudChat,
-                    localData.chatHistory
+                    exportChat
                   );
 
 
                 source =
                   'local + cloud';
               }
-            } catch (cloudError) {
+            } catch (
+              cloudError
+            ) {
               /**
-               * Cloud export failure must NEVER destroy or
-               * prevent local export.
+               * Cloud failure must never prevent local
+               * export.
                */
               console.warn(
-                'Cloud export unavailable. Exporting local data instead.',
+                'Cloud export unavailable. Continuing with local data.',
                 cloudError
               );
+
+              source =
+                'local';
             }
           }
 
@@ -2127,12 +2162,31 @@ export default function App() {
           // APP SETTINGS
           // =================================================
 
-          const settings =
-            Storage.getAppSettings();
+          let settings:
+            ReturnType<
+              typeof Storage.getAppSettings
+            >;
+
+          try {
+            settings =
+              Storage.getAppSettings();
+          } catch (
+            settingsError
+          ) {
+            console.warn(
+              'Could not load app settings for export.',
+              settingsError
+            );
+
+            settings =
+              {} as ReturnType<
+                typeof Storage.getAppSettings
+              >;
+          }
 
 
           // =================================================
-          // FINAL BACKUP
+          // FINAL BACKUP OBJECT
           // =================================================
 
           const backup = {
@@ -2140,7 +2194,7 @@ export default function App() {
               'Nodysom AI',
 
             developer:
-              'ANORD BONIPHACE',
+              'ANORD BONIPHACE SOMEKE',
 
             version:
               '1.0.0',
@@ -2170,7 +2224,7 @@ export default function App() {
 
 
           // =================================================
-          // CREATE JSON FILE
+          // CREATE JSON
           // =================================================
 
           const json =
@@ -2179,6 +2233,11 @@ export default function App() {
               null,
               2
             );
+
+
+          // =================================================
+          // CREATE DOWNLOAD
+          // =================================================
 
           const blob =
             new Blob(
@@ -2209,6 +2268,9 @@ export default function App() {
                 .split('T')[0]
             }.json`;
 
+          anchor.style.display =
+            'none';
+
           document.body.appendChild(
             anchor
           );
@@ -2224,40 +2286,162 @@ export default function App() {
           );
 
 
+          // =================================================
+          // DEBUG INFORMATION
+          // =================================================
+
           console.log(
-            'Nodysom AI data export completed.',
+            'Nodysom AI data export completed successfully.',
             {
               source,
+
+              user:
+                Boolean(
+                  exportUser
+                ),
+
               memories:
                 exportMemories.length,
+
               planner:
                 exportPlanner.length,
+
               habits:
                 exportHabits.length,
+
               chat:
                 exportChat.length,
             }
           );
-        } catch (error) {
+        } catch (
+          error
+        ) {
+          /**
+           * IMPORTANT:
+           *
+           * We intentionally DO NOT call
+           * Storage.exportAllDataJSON() anymore.
+           *
+           * Calling the old exporter here was the reason
+           * an old JSON structure could appear again.
+           */
+
           console.error(
-            'Export data error:',
+            'Nodysom AI export failed:',
             error
           );
 
           /**
-           * Final fallback:
+           * Create a final emergency backup directly from
+           * the current in-memory local state.
            *
-           * If anything unexpected happens in the new
-           * export process, use the existing local exporter.
+           * This still uses the NEW Nodysom AI export format.
            */
           try {
-            Storage.exportAllDataJSON();
+            const emergencyData =
+              latestDataRef.current;
+
+            const emergencyBackup = {
+              app:
+                'Nodysom AI',
+
+              developer:
+                'ANORD BONIPHACE SOMEKE',
+
+              version:
+                '1.0.0',
+
+              exportedAt:
+                new Date().toISOString(),
+
+              source:
+                'local',
+
+              user:
+                emergencyData.user,
+
+              memories:
+                emergencyData.memories,
+
+              planner:
+                emergencyData.plannerItems,
+
+              habits:
+                emergencyData.habits,
+
+              chat:
+                emergencyData.chatHistory,
+
+              settings:
+                {},
+            };
+
+            const emergencyJson =
+              JSON.stringify(
+                emergencyBackup,
+                null,
+                2
+              );
+
+            const emergencyBlob =
+              new Blob(
+                [emergencyJson],
+                {
+                  type:
+                    'application/json;charset=utf-8',
+                }
+              );
+
+            const emergencyUrl =
+              URL.createObjectURL(
+                emergencyBlob
+              );
+
+            const emergencyAnchor =
+              document.createElement(
+                'a'
+              );
+
+            emergencyAnchor.href =
+              emergencyUrl;
+
+            emergencyAnchor.download =
+              `Nodysom_AI_Backup_${
+                new Date()
+                  .toISOString()
+                  .split('T')[0]
+              }.json`;
+
+            emergencyAnchor.style.display =
+              'none';
+
+            document.body.appendChild(
+              emergencyAnchor
+            );
+
+            emergencyAnchor.click();
+
+            document.body.removeChild(
+              emergencyAnchor
+            );
+
+            URL.revokeObjectURL(
+              emergencyUrl
+            );
+
+            console.log(
+              'Emergency Nodysom AI export completed.'
+            );
           } catch (
-            fallbackError
+            emergencyError
           ) {
             console.error(
-              'Local export fallback failed:',
-              fallbackError
+              'Emergency export failed:',
+              emergencyError
+            );
+
+            alert(
+              'Nodysom AI could not export your data. Please try again.'
             );
           }
         }
@@ -2462,6 +2646,12 @@ export default function App() {
                 handleDeleteMemory
               }
 
+              /**
+               * IMPORTANT:
+               *
+               * Export My Data now uses the new complete
+               * exporter above.
+               */
               onExportData={
                 handleExportAllData
               }
