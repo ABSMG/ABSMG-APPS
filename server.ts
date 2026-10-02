@@ -36,7 +36,14 @@ const PORT =
    GOOGLE GEMINI INTERACTIONS API
 ========================================================= */
 
-const AI_TIMEOUT_MS = 30000;
+/*
+ * Increased from 30 seconds to 120 seconds.
+ *
+ * This prevents normal Gemini requests, especially Search,
+ * Translation and Smart Schedule requests, from timing out
+ * too quickly.
+ */
+const AI_TIMEOUT_MS = 120000;
 
 const GEMINI_MODEL =
   String(
@@ -485,10 +492,24 @@ async function callGemini(
     };
   }
 
+  /*
+   * The SDK request itself receives the same
+   * 120-second timeout as the application-level
+   * timeout below.
+   *
+   * This prevents the SDK/network layer from
+   * waiting indefinitely while still giving
+   * Gemini enough time to answer.
+   */
+
   const interaction =
     await withTimeout(
       ai.interactions.create(
-        interactionRequest
+        interactionRequest,
+        {
+          timeout:
+            AI_TIMEOUT_MS,
+        }
       )
     );
 
@@ -2154,6 +2175,11 @@ async function startServer() {
     );
   }
 
+  /*
+   * Render requires the application to listen
+   * on 0.0.0.0 and the PORT supplied by Render.
+   */
+
   app.listen(
     PORT,
     "0.0.0.0",
@@ -2181,6 +2207,10 @@ async function startServer() {
 
       console.log(
         `[Nodysom AI] Google Gemini model: ${GEMINI_MODEL}`
+      );
+
+      console.log(
+        `[Nodysom AI] AI request timeout: ${AI_TIMEOUT_MS}ms`
       );
     }
   );
