@@ -36,7 +36,23 @@ const PORT =
    GOOGLE GEMINI + OPENROUTER FALLBACK
 ========================================================= */
 
-const AI_TIMEOUT_MS = 120000;
+/*
+ * IMPORTANT PERFORMANCE CHANGE
+ *
+ * The old timeout was 120 seconds.
+ *
+ * That meant:
+ *
+ * Gemini could wait 120s
+ *       ↓
+ * OpenRouter could then wait another 120s
+ *
+ * The new architecture fails over much faster.
+ */
+
+const AI_TIMEOUT_MS = 25000;
+
+const SEARCH_TIMEOUT_MS = 20000;
 
 const GEMINI_MODEL =
   String(
@@ -71,6 +87,21 @@ const MAX_REQUESTS_PER_WINDOW = 60;
 
 const RATE_LIMIT_WINDOW_MS =
   60 * 1000;
+
+/*
+ * Smaller outputs are generally faster.
+ *
+ * These are defaults only. Existing endpoint
+ * features remain unchanged.
+ */
+
+const DEFAULT_MAX_TOKENS = 2048;
+
+const SEARCH_MAX_TOKENS = 2500;
+
+const TRANSLATION_MAX_TOKENS = 1200;
+
+const SCHEDULE_MAX_TOKENS = 1800;
 
 /* =========================================================
    BODY PARSER
@@ -242,8 +273,17 @@ function safeJsonStringify(
 }
 
 /* =========================================================
-   TIMEOUT
+   TIMEOUT / CANCELLATION
 ========================================================= */
+
+/*
+ * Promise timeout.
+ *
+ * This protects SDK requests.
+ *
+ * The SDK itself also receives the same timeout where
+ * supported.
+ */
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -260,7 +300,7 @@ async function withTimeout<T>(
           setTimeout(() => {
             reject(
               new Error(
-                "AI request timed out. Please try again."
+                `AI request timed out after ${timeoutMs}ms.`
               )
             );
           }, timeoutMs);
@@ -276,6 +316,51 @@ async function withTimeout<T>(
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+  }
+}
+
+/*
+ * Fetch timeout with real cancellation.
+ *
+ * This is important for OpenRouter because
+ * Promise.race alone does NOT cancel fetch().
+ */
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller =
+    new AbortController();
+
+  const timeoutId =
+    setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
+  try {
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          controller.signal,
+      }
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "AbortError"
+    ) {
+      throw new Error(
+        `AI request timed out after ${timeoutMs}ms.`
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -468,8 +553,13 @@ async function callGemini(
 
     generation_config: {
       max_output_tokens:
-        options?.maxTokens || 4096,
+        options?.maxTokens ||
+        DEFAULT_MAX_TOKENS,
 
+      /*
+       * Low thinking is intentional for
+       * faster normal assistant responses.
+       */
       thinking_level:
         "low",
     },
@@ -499,7 +589,8 @@ async function callGemini(
           timeout:
             AI_TIMEOUT_MS,
         }
-      )
+      ),
+      AI_TIMEOUT_MS
     );
 
   const text =
@@ -529,6 +620,7 @@ async function callOpenRouter(
     json?: boolean;
     maxTokens?: number;
     tools?: unknown[];
+    timeoutMs?: number;
   }
 ): Promise<GeminiResponse> {
   const apiKey =
@@ -561,7 +653,8 @@ async function callOpenRouter(
       ),
 
     max_tokens:
-      options?.maxTokens || 4096,
+      options?.maxTokens ||
+      DEFAULT_MAX_TOKENS,
   };
 
   if (
@@ -578,35 +671,37 @@ async function callOpenRouter(
     };
   }
 
+  const timeoutMs =
+    options?.timeoutMs ||
+    AI_TIMEOUT_MS;
+
   const response =
-    await withTimeout(
-      fetch(
-        OPENROUTER_URL,
-        {
-          method: "POST",
+    await fetchWithTimeout(
+      OPENROUTER_URL,
+      {
+        method: "POST",
 
-          headers: {
-            Authorization:
-              `Bearer ${apiKey}`,
+        headers: {
+          Authorization:
+            `Bearer ${apiKey}`,
 
-            "HTTP-Referer":
-              String(
-                process.env.APP_URL ||
-                "https://absmg-apps.onrender.com"
-              ),
+          "HTTP-Referer":
+            String(
+              process.env.APP_URL ||
+              "https://absmg-apps.onrender.com"
+            ),
 
-            "X-Title":
-              "Nodysom AI",
+          "X-Title":
+            "Nodysom AI",
 
-            "Content-Type":
-              "application/json",
-          },
+          "Content-Type":
+            "application/json",
+        },
 
-          body:
-            JSON.stringify(body),
-        }
-      ),
-      AI_TIMEOUT_MS
+        body:
+          JSON.stringify(body),
+      },
+      timeoutMs
     );
 
   const rawBody =
@@ -689,14 +784,25 @@ async function callAI(
 
   /*
    * PRIMARY
+   *
+   * Gemini gets only 25 seconds.
+   *
+   * If Gemini is rate-limited, times out,
+   * or otherwise fails, OpenRouter starts
+   * immediately.
    */
 
   if (hasGeminiKey()) {
     try {
+      console.log(
+        "[Nodysom AI] Trying Gemini..."
+      );
+
       return await callGemini(
         messages,
         options
       );
+
     } catch (error) {
       geminiError =
         error instanceof Error
@@ -719,10 +825,20 @@ async function callAI(
 
   if (hasOpenRouterKey()) {
     try {
+      console.log(
+        "[Nodysom AI] Trying OpenRouter fallback..."
+      );
+
       return await callOpenRouter(
         messages,
-        options
+        {
+          ...options,
+
+          timeoutMs:
+            AI_TIMEOUT_MS,
+        }
       );
+
     } catch (error) {
       const openRouterError =
         error instanceof Error
@@ -1056,7 +1172,13 @@ If another local tool is required, return a toolCall instead.
         messages,
         {
           json: true,
-          maxTokens: 4096,
+
+          /*
+           * 2048 is enough for most agent JSON
+           * responses and reduces generation time.
+           */
+          maxTokens:
+            DEFAULT_MAX_TOKENS,
         }
       );
 
@@ -1388,6 +1510,23 @@ app.get(
 
       hasOpenRouterKey:
         hasUsableOpenRouterKey,
+
+      performance: {
+        aiTimeoutMs:
+          AI_TIMEOUT_MS,
+
+        searchTimeoutMs:
+          SEARCH_TIMEOUT_MS,
+
+        defaultMaxTokens:
+          DEFAULT_MAX_TOKENS,
+
+        searchMaxTokens:
+          SEARCH_MAX_TOKENS,
+
+        architecture:
+          "Fast Gemini primary + OpenRouter fallback",
+      },
 
       search:
         {
@@ -1934,8 +2073,8 @@ function extractUrlsFromValue(
       Object.entries(object)
     ) {
       /*
-       * Avoid treating huge metadata fields
-       * as sources unless they actually contain URLs.
+       * Avoid treating secret/config metadata
+       * as sources.
        */
       if (
         key === "apiKey" ||
@@ -2056,7 +2195,7 @@ Instructions:
 
           generation_config: {
             max_output_tokens:
-              4000,
+              SEARCH_MAX_TOKENS,
 
             thinking_level:
               "low",
@@ -2064,9 +2203,10 @@ Instructions:
         } as any,
         {
           timeout:
-            AI_TIMEOUT_MS,
+            SEARCH_TIMEOUT_MS,
         }
-      )
+      ),
+      SEARCH_TIMEOUT_MS
     );
 
   const summary =
@@ -2083,8 +2223,7 @@ Instructions:
 
   /*
    * Search citations can appear in different parts
-   * of the Interactions API response. Search the
-   * response recursively for URLs.
+   * of the Interactions API response.
    */
 
   const sources =
@@ -2169,7 +2308,7 @@ Rules:
         json: false,
 
         maxTokens:
-          4000,
+          SEARCH_MAX_TOKENS,
 
         tools: [
           {
@@ -2177,6 +2316,13 @@ Rules:
               "openrouter:web_search",
           },
         ],
+
+        /*
+         * Search gets a shorter timeout than
+         * normal AI requests.
+         */
+        timeoutMs:
+          SEARCH_TIMEOUT_MS,
       }
     );
 
@@ -2192,10 +2338,10 @@ Rules:
   }
 
   /*
-   * OpenRouter citations can be present in the
-   * model response/annotations. Since callOpenRouter
-   * intentionally returns only text, attempt to
-   * recover URLs directly from the generated result.
+   * OpenRouter citations may exist in annotations
+   * outside the text returned by the current wrapper.
+   *
+   * We still recover direct URLs from the response.
    */
 
   const sources =
@@ -2577,7 +2723,9 @@ Rules:
           messages,
           {
             json: true,
-            maxTokens: 2500,
+
+            maxTokens:
+              TRANSLATION_MAX_TOKENS,
           }
         );
 
@@ -2821,7 +2969,9 @@ ${prompt}
           messages,
           {
             json: true,
-            maxTokens: 3000,
+
+            maxTokens:
+              SCHEDULE_MAX_TOKENS,
           }
         );
 
@@ -3049,6 +3199,10 @@ async function startServer() {
 
       console.log(
         `[Nodysom AI] AI request timeout: ${AI_TIMEOUT_MS}ms`
+      );
+
+      console.log(
+        `[Nodysom Search] Search timeout: ${SEARCH_TIMEOUT_MS}ms`
       );
 
       console.log(
