@@ -5,50 +5,86 @@
 
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
     />
 
     <title>Nodysom AI — Plan Your Day. Live Smarter.</title>
 
     <meta
       name="description"
-      content="Nodysom AI is your intelligent daily life assistant for routines, planning, tasks, learning, goals, and everyday productivity."
+      content="Nodysom AI is your intelligent daily life assistant for planning, tasks, learning, goals, AI search, translation, smart scheduling and everyday productivity."
     />
 
     <meta
       name="keywords"
-      content="Nodysom AI, AI planner, daily routine, daily planner, life assistant, productivity, AI assistant"
+      content="Nodysom AI, AI assistant, AI planner, daily planner, productivity, life assistant, learning assistant, AI search, translation, smart schedule"
     />
 
+    <meta name="author" content="Nodysom AI" />
+    <meta name="robots" content="index, follow" />
+
     <meta name="theme-color" content="#0F172A" />
+    <meta name="color-scheme" content="dark" />
 
     <!-- PWA -->
-    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="Nodysom AI" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
 
     <!-- Apple -->
     <meta
       name="apple-mobile-web-app-title"
       content="Nodysom AI"
     />
+
     <meta
       name="apple-mobile-web-app-capable"
       content="yes"
     />
+
     <meta
       name="apple-mobile-web-app-status-bar-style"
       content="black-translucent"
     />
 
-    <!-- Social sharing -->
-    <meta property="og:title" content="Nodysom AI" />
+    <!-- Open Graph -->
+    <meta
+      property="og:title"
+      content="Nodysom AI — Plan Your Day. Live Smarter."
+    />
+
     <meta
       property="og:description"
-      content="Plan your day. Live smarter."
+      content="Your intelligent daily life assistant for planning, learning, tasks, goals, search, translation and productivity."
     />
+
     <meta property="og:type" content="website" />
 
-    <meta name="twitter:card" content="summary_large_image" />
+    <meta property="og:url" content="/" />
+
+    <meta
+      property="og:site_name"
+      content="Nodysom AI"
+    />
+
+    <!-- Twitter -->
+    <meta
+      name="twitter:card"
+      content="summary_large_image"
+    />
+
+    <meta
+      name="twitter:title"
+      content="Nodysom AI — Plan Your Day. Live Smarter."
+    />
+
+    <meta
+      name="twitter:description"
+      content="Your intelligent daily life assistant."
+    />
 
     <!-- PWA Manifest -->
     <link
@@ -59,13 +95,13 @@
     <!-- Icons -->
     <link
       rel="icon"
-      href="/icons/icon-192.png"
-      type="image/png"
+      href="/icons/icon-192.svg"
+      type="image/svg+xml"
     />
 
     <link
       rel="apple-touch-icon"
-      href="/icons/icon-192.png"
+      href="/icons/icon-192.svg"
     />
 
     <!-- Fonts -->
@@ -81,11 +117,43 @@
       href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Basic structured data -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Nodysom AI",
+        "applicationCategory": "ProductivityApplication",
+        "operatingSystem": "Web, Android",
+        "description": "An intelligent daily life assistant for planning, learning, tasks, goals, search, translation and productivity.",
+        "browserRequirements": "Requires JavaScript",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
   </head>
 
   <body
     class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500/30 selection:text-indigo-200 min-h-screen"
   >
+    <noscript>
+      <div
+        style="
+          padding: 24px;
+          font-family: sans-serif;
+          text-align: center;
+          background: #020617;
+          color: white;
+        "
+      >
+        Nodysom AI requires JavaScript to run.
+      </div>
+    </noscript>
+
     <div id="root"></div>
 
     <script
