@@ -49,11 +49,11 @@ const PORT =
  * minutes before switching providers.
  */
 
-const AI_TIMEOUT_MS = 15000;
+const AI_TIMEOUT_MS = 60000;
 
 const SEARCH_TIMEOUT_MS = 18000;
 
-const OPENROUTER_TIMEOUT_MS = 18000;
+const OPENROUTER_TIMEOUT_MS = 60000;
 
 const GEMINI_COOLDOWN_MS =
   15 * 60 * 1000;
