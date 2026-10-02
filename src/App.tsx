@@ -31,7 +31,7 @@ import { TranslatorModal } from './components/TranslatorModal';
 import { SmartActionModal } from './components/SmartActionModal';
 import { OnboardingModal } from './components/OnboardingModal';
 
-const AI_TIMEOUT_MS = 30000;
+const AI_TIMEOUT_MS = 120000;
 const MAX_HISTORY = 6;
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_MEMORY_ITEMS = 6;
