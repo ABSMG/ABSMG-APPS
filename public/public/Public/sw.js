@@ -1,4 +1,4 @@
-const CACHE_NAME = "nodysom-ai-v2";
+const CACHE_NAME = "nodysom-ai-v3";
 
 const APP_SHELL = [
   "/",
@@ -12,12 +12,7 @@ self.addEventListener("install", (event) => {
     caches
       .open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
-      .catch((error) => {
-        console.warn(
-          "Nodysom AI service worker cache setup failed:",
-          error
-        );
-      })
+      .catch(() => {})
   );
 
   self.skipWaiting();
@@ -47,17 +42,10 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  if (url.origin !== self.location.origin) {
-    return;
-  }
-
-  /*
-   * Never cache API responses.
-   *
-   * Nodysom AI responses must remain live because
-   * they depend on Gemini/OpenRouter/Supabase.
-   */
-  if (url.pathname.startsWith("/api/")) {
+  if (
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith("/api/")
+  ) {
     return;
   }
 
@@ -78,52 +66,16 @@ self.addEventListener("fetch", (event) => {
       .catch(async () => {
         const cached = await caches.match(request);
 
-        if (cached) {
-          return cached;
-        }
-
-        const fallback = await caches.match("/");
-
         return (
-          fallback ||
-          new Response(
-            `
-              <!doctype html>
-              <html>
-                <head>
-                  <meta charset="utf-8">
-                  <title>Nodysom AI</title>
-                  <meta name="viewport" content="width=device-width,initial-scale=1">
-                </head>
-                <body
-                  style="
-                    margin:0;
-                    min-height:100vh;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    background:#020617;
-                    color:white;
-                    font-family:system-ui,sans-serif;
-                    text-align:center;
-                    padding:24px;
-                  "
-                >
-                  <div>
-                    <h1>Nodysom AI</h1>
-                    <p>You are currently offline.</p>
-                    <p>Please reconnect to continue using AI features.</p>
-                  </div>
-                </body>
-              </html>
-            `,
-            {
-              status: 503,
-              headers: {
-                "Content-Type": "text/html; charset=utf-8"
-              }
+          cached ||
+          (await caches.match("/")) ||
+          new Response("Nodysom AI is offline.", {
+            status: 503,
+            headers: {
+              "Content-Type":
+                "text/plain; charset=utf-8"
             }
-          )
+          })
         );
       })
   );
