@@ -33,7 +33,7 @@ const PORT =
 
 /* =========================================================
    AI CONFIGURATION
-   GOOGLE GEMINI
+   GOOGLE GEMINI INTERACTIONS API
 ========================================================= */
 
 const AI_TIMEOUT_MS = 30000;
@@ -41,7 +41,7 @@ const AI_TIMEOUT_MS = 30000;
 const GEMINI_MODEL =
   String(
     process.env.GEMINI_MODEL ||
-      "gemini-2.5-flash-lite"
+      "gemini-3.8-flash"
   )
     .trim();
 
@@ -368,7 +368,7 @@ Goals: ${cleanText(
 }
 
 /* =========================================================
-   GOOGLE GEMINI REQUEST
+   GOOGLE GEMINI INTERACTIONS API
 ========================================================= */
 
 async function callGemini(
@@ -410,7 +410,16 @@ async function callGemini(
         message.role !== "system"
     );
 
-  const contents =
+  /*
+   * Interactions API supports a string input
+   * as well as structured interaction input.
+   *
+   * We preserve the existing Nodysom history
+   * architecture by composing the messages into
+   * one stateless interaction input.
+   */
+
+  const conversationText =
     nonSystemMessages
       .map(
         (message) => {
@@ -425,39 +434,67 @@ async function callGemini(
       )
       .join("\n\n");
 
-  const config: any = {
-    maxOutputTokens:
-      options?.maxTokens || 4096,
+  const input =
+    conversationText ||
+    "Hello";
+
+  /*
+   * Interaction-scoped configuration.
+   *
+   * system_instruction,
+   * generation_config,
+   * response_format
+   * are intentionally supplied on every
+   * interaction.
+   */
+
+  const interactionRequest: any = {
+    model:
+      GEMINI_MODEL,
+
+    input,
+
+    generation_config: {
+      max_output_tokens:
+        options?.maxTokens || 4096,
+
+      thinking_level:
+        "low",
+    },
   };
 
   if (
     systemMessage?.content
   ) {
-    config.systemInstruction =
+    interactionRequest.system_instruction =
       systemMessage.content;
   }
 
+  /*
+   * Current Interactions API JSON output.
+   *
+   * response_mime_type is NOT used here.
+   */
+
   if (options?.json) {
-    config.responseMimeType =
-      "application/json";
+    interactionRequest.response_format = {
+      type: "text",
+
+      mime_type:
+        "application/json",
+    };
   }
 
-  const response =
+  const interaction =
     await withTimeout(
-      ai.models.generateContent({
-        model:
-          GEMINI_MODEL,
-
-        contents:
-          contents || "Hello",
-
-        config,
-      })
+      ai.interactions.create(
+        interactionRequest
+      )
     );
 
   const text =
     cleanText(
-      response.text,
+      interaction.output_text,
       30000
     );
 
@@ -1122,6 +1159,9 @@ app.get(
       aiProvider:
         "Google Gemini",
 
+      api:
+        "Interactions API",
+
       model:
         GEMINI_MODEL,
 
@@ -1152,7 +1192,7 @@ app.get(
           "/api/agent",
 
         architecture:
-          "Google Gemini JSON Agent Protocol + Local Tool Controller",
+          "Google Gemini Interactions API + JSON Agent Protocol + Local Tool Controller",
 
         tools: [
           "calculator",
@@ -2133,6 +2173,10 @@ async function startServer() {
 
       console.log(
         `[Nodysom AI] Google Gemini key available: ${runtimeKeyUsable}`
+      );
+
+      console.log(
+        `[Nodysom AI] Google Gemini API: Interactions`
       );
 
       console.log(
