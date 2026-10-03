@@ -321,15 +321,7 @@ function hasOpenRouterKey(): boolean {
   );
 }
 
-function hasGroqKey(): boolean {
-  const key =
-    getGroqKey();
 
-  return (
-    key.length > 0 &&
-    !isPlaceholderKey(key)
-  );
-}
 
 function hasAIProvider(): boolean {
   return (
