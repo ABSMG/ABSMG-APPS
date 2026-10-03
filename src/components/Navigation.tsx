@@ -5,6 +5,7 @@ import {
   BookOpen,
   Calendar,
   User,
+  MessageCircle,
   Mic,
   Wifi,
   WifiOff,
@@ -178,6 +179,11 @@ export function BottomNav({
       icon: Home,
     },
     {
+      id: 'chat' as TabType,
+      label: 'Chat',
+      icon: MessageCircle,
+    },
+    {
       id: 'search' as TabType,
       label: 'Search',
       icon: Search,
@@ -201,16 +207,15 @@ export function BottomNav({
 
   return (
     <nav
-  
-  aria-label="Primary navigation"
-  className="safe-bottom fixed inset-x-0 bottom-0 z-[99999]   border-t border-white/[0.08] bg-slate-950/90 backdrop-blur-2xl"
+      aria-label="Primary navigation"
+      className="safe-bottom fixed inset-x-0 bottom-0 z-[99999] border-t border-white/[0.08] bg-slate-950/90 backdrop-blur-2xl"
       style={{
         touchAction: 'manipulation',
         WebkitTapHighlightColor:
           'transparent',
       }}
     >
-      <div className="mx-auto flex max-w-2xl items-center justify-around gap-1 px-2 py-2 sm:px-4">
+      <div className="mx-auto flex max-w-3xl items-center justify-around gap-1 px-2 py-2 sm:px-4">
 
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -232,7 +237,7 @@ export function BottomNav({
                 event.stopPropagation();
                 onSelectTab(tab.id);
               }}
-              className={`group relative z-[100000] flex min-w-[62px] flex-1 cursor-pointer flex-col items-center gap-1 rounded-2xl px-2 py-2 text-[10px] font-semibold transition-all duration-200 active:scale-90 sm:min-w-[72px] sm:text-[11px] ${
+              className={`group relative z-[100000] flex min-w-[54px] flex-1 cursor-pointer flex-col items-center gap-1 rounded-2xl px-1.5 py-2 text-[10px] font-semibold transition-all duration-200 active:scale-90 sm:min-w-[68px] sm:px-2 sm:text-[11px] ${
                 active
                   ? 'bg-indigo-500/[0.12] text-indigo-300'
                   : 'text-slate-500 hover:bg-white/[0.04] hover:text-slate-200'
@@ -240,7 +245,7 @@ export function BottomNav({
             >
 
               <span
-                className={`flex h-8 w-11 items-center justify-center rounded-xl transition-all duration-200 ${
+                className={`flex h-8 w-10 items-center justify-center rounded-xl transition-all duration-200 ${
                   active
                     ? 'bg-indigo-500/15 shadow-sm shadow-indigo-500/10'
                     : 'group-hover:bg-white/[0.04]'
