@@ -1,5 +1,6 @@
 import React, {
   FormEvent,
+  useMemo,
   useState,
 } from 'react';
 
@@ -465,6 +466,10 @@ function renderAssistantContent(
     }
   );
 
+  if (inCode) {
+    flushCode();
+  }
+
   flushList();
   flushCode();
 
@@ -499,6 +504,11 @@ export function HomeView({
   const name =
     user?.name?.trim() ||
     'there';
+
+  const todayDate =
+    new Date()
+      .toISOString()
+      .split('T')[0];
 
   /* =======================================================
      SEND MESSAGE
@@ -553,6 +563,14 @@ export function HomeView({
     item: ChatMessage
   ) => {
     try {
+      if (
+        !navigator.clipboard ||
+        typeof navigator.clipboard.writeText !==
+          'function'
+      ) {
+        return;
+      }
+
       await navigator.clipboard.writeText(
         item.content
       );
@@ -589,10 +607,12 @@ export function HomeView({
     {
       title: 'Ask Nodysom',
       description:
-        'Get intelligent help instantly',
+        'Open the full AI chat assistant',
       icon: MessageCircle,
       action: () =>
-        onOpenVoice?.(),
+        onNavigate?.(
+          'chat'
+        ),
       primary: true,
     },
     {
@@ -632,22 +652,50 @@ export function HomeView({
      ======================================================= */
 
   const recentMessages =
-    chatHistory.slice(-6);
+    useMemo(
+      () =>
+        chatHistory
+          .filter(
+            (item) =>
+              item.role !==
+              'system'
+          )
+          .slice(-6),
+      [chatHistory]
+    );
 
   /* =======================================================
      TODAY TASKS
      ======================================================= */
 
   const todayTasks =
-    plannerItems
-      .filter(
-        (item) =>
-          item.date ===
-          new Date()
-            .toISOString()
-            .split('T')[0]
-      )
-      .slice(0, 4);
+    useMemo(
+      () =>
+        plannerItems
+          .filter(
+            (item) =>
+              item.date ===
+              todayDate
+          )
+          .slice(0, 4),
+      [
+        plannerItems,
+        todayDate,
+      ]
+    );
+
+  /* =======================================================
+     DISPLAY TIME
+     ======================================================= */
+
+  const currentTime =
+    new Date().toLocaleTimeString(
+      [],
+      {
+        hour: '2-digit',
+        minute: '2-digit',
+      }
+    );
 
   return (
     <main className="nodysom-fade-up mx-auto w-full max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:px-8">
@@ -710,6 +758,29 @@ export function HomeView({
                       .value
                   )
                 }
+                onKeyDown={(
+                  event
+                ) => {
+                  if (
+                    event.key ===
+                      'Enter' &&
+                    !event.shiftKey
+                  ) {
+                    event.preventDefault();
+
+                    if (
+                      message.trim()
+                    ) {
+                      onSendMessage?.(
+                        message.trim()
+                      );
+
+                      setMessage(
+                        ''
+                      );
+                    }
+                  }
+                }}
                 placeholder={
                   isLoading
                     ? 'Nodysom is thinking...'
@@ -718,6 +789,7 @@ export function HomeView({
                 disabled={
                   isLoading
                 }
+                maxLength={2000}
                 className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
               />
 
@@ -742,11 +814,15 @@ export function HomeView({
                 )}
               </button>
             </div>
+
+            <div className="mt-2 flex justify-end px-2 text-[9px] text-slate-700">
+              {message.length}/2000
+            </div>
           </form>
 
           {/* QUICK PROMPTS */}
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-1 flex flex-wrap gap-2">
 
             {[
               'Help me plan my day',
@@ -780,8 +856,10 @@ export function HomeView({
 
             <button
               type="button"
-              onClick={
-                onOpenVoice
+              onClick={() =>
+                onNavigate?.(
+                  'chat'
+                )
               }
               className="nodysom-btn nodysom-btn-primary group"
             >
@@ -802,17 +880,15 @@ export function HomeView({
             <button
               type="button"
               onClick={() =>
-                onNavigate?.(
-                  'learn'
-                )
+                onOpenVoice?.()
               }
               className="nodysom-btn nodysom-btn-secondary"
             >
-              <BookOpen
+              <MessageCircle
                 size={16}
               />
 
-              Explore Learning
+              Voice Assistant
             </button>
 
           </div>
@@ -841,11 +917,22 @@ export function HomeView({
               </h3>
             </div>
 
-            <span className="rounded-full border border-indigo-400/15 bg-indigo-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-indigo-300">
-              {isLoading
-                ? 'Thinking'
-                : 'Ready'}
-            </span>
+            <button
+              type="button"
+              onClick={() =>
+                onNavigate?.(
+                  'chat'
+                )
+              }
+              className="group flex items-center gap-1 rounded-xl border border-white/[0.06] bg-white/[0.025] px-2.5 py-1.5 text-[9px] font-bold text-slate-500 transition hover:border-indigo-400/20 hover:bg-indigo-500/10 hover:text-indigo-300"
+            >
+              Open Chat
+
+              <ArrowRight
+                size={11}
+                className="transition-transform group-hover:translate-x-0.5"
+              />
+            </button>
 
           </div>
 
@@ -950,13 +1037,13 @@ export function HomeView({
                           {/* MESSAGE */}
 
                           {isUser ? (
-                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-indigo-50">
+                            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-indigo-50">
                               {
                                 item.content
                               }
                             </p>
                           ) : (
-                            <div className="mt-3 space-y-3">
+                            <div className="mt-3 space-y-3 overflow-hidden">
                               {renderAssistantContent(
                                 item.content
                               )}
@@ -966,9 +1053,17 @@ export function HomeView({
                           {/* TIME */}
 
                           <p className="mt-3 text-[9px] font-medium text-slate-600">
-                            {
-                              item.timestamp
-                            }
+                            {item.timestamp
+                              ? new Date(
+                                  item.timestamp
+                                ).toLocaleTimeString(
+                                  [],
+                                  {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  }
+                                )
+                              : currentTime}
                           </p>
 
                         </div>
@@ -1279,8 +1374,10 @@ export function HomeView({
 
             <button
               type="button"
-              onClick={
-                onOpenVoice
+              onClick={() =>
+                onNavigate?.(
+                  'chat'
+                )
               }
               disabled={
                 isLoading
@@ -1291,7 +1388,24 @@ export function HomeView({
                 size={15}
               />
 
-              Talk to Nodysom
+              Open AI Chat
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onOpenVoice?.()
+              }
+              disabled={
+                isLoading
+              }
+              className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.025] text-[11px] font-semibold text-slate-400 transition-all hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <MessageCircle
+                size={14}
+              />
+
+              Voice Assistant
             </button>
 
           </div>
