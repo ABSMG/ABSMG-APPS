@@ -1,4 +1,10 @@
-export type TabType = 'home' | 'search' | 'learn' | 'planner' | 'profile';
+export type TabType =
+  | 'home'
+  | 'chat'
+  | 'search'
+  | 'learn'
+  | 'planner'
+  | 'profile';
 
 export type UserTier = 'FREE' | 'PLUS' | 'BUSINESS';
 
@@ -23,6 +29,7 @@ export interface MemoryItem {
 }
 
 export type PlannerItemType = 'task' | 'reminder' | 'schedule_block';
+
 export type PriorityType = 'low' | 'normal' | 'high';
 
 export interface PlannerItem {
