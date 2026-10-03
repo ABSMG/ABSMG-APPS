@@ -51,16 +51,11 @@ const PORT =
  * one AI provider.
  */
 
-const AI_TIMEOUT_MS = 60000;
-
-const SEARCH_TIMEOUT_MS = 18000;
-
-const OPENROUTER_TIMEOUT_MS = 60000;
-
-const GROQ_TIMEOUT_MS = 45000;
-
-const GEMINI_COOLDOWN_MS =
-  15 * 60 * 1000;
+const AI_TIMEOUT_MS = 15000;
+const SEARCH_TIMEOUT_MS = 8000;
+const OPENROUTER_TIMEOUT_MS = 12000;
+const GROQ_TIMEOUT_MS = 10000;
+const GEMINI_COOLDOWN_MS = 15 * 60 * 1000;
 
 const GEMINI_MODEL =
   String(
