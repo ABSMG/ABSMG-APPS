@@ -277,11 +277,17 @@ function getOpenRouterKey(): string {
     process.env.OPENROUTER_API_KEY || ""
   ).trim();
 }
-
 function getGroqKey(): string {
-  return String(
-    process.env.GROQ_API_KEY || ""
-  ).trim();
+  return String(process.env.GROQ_API_KEY || "").trim();
+}
+
+function hasGroqKey(): boolean {
+  const key = getGroqKey();
+
+  return (
+    key.length > 0 &&
+    !isPlaceholderKey(key)
+  );
 }
 
 function isPlaceholderKey(
