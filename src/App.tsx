@@ -37,9 +37,15 @@ import {
 } from './components/Navigation';
 
 import { HomeView } from './components/HomeView';
+
+import { ChatView } from './components/ChatView';
+
 import { SearchView } from './components/SearchView';
+
 import { PlannerView } from './components/PlannerView';
+
 import { LearnView } from './components/LearnView';
+
 import { ProfileView } from './components/ProfileView';
 
 import {
@@ -1397,6 +1403,53 @@ export default function App() {
 
 
   // =========================================================
+  // NEW CHAT
+  // =========================================================
+
+  /**
+   * Starts a fresh Nodysom AI chat.
+   *
+   * IMPORTANT:
+   *
+   * This only clears the currently visible/local chat
+   * history. It does NOT remove:
+   *
+   * - Login / account
+   * - Supabase account
+   * - Memories
+   * - Planner
+   * - Habits
+   * - User profile
+   * - App settings
+   *
+   * The existing chat history can still be part of the
+   * cloud/export architecture when the application syncs
+   * or exports its current data.
+   */
+  const handleNewChat =
+    () => {
+      if (isLoadingAI) {
+        return;
+      }
+
+      const emptyChat:
+        ChatMessage[] = [];
+
+      setChatHistory(
+        emptyChat
+      );
+
+      Storage.saveChatHistory(
+        emptyChat
+      );
+
+      setPendingAction(
+        null
+      );
+    };
+
+
+  // =========================================================
   // AI AGENT
   // =========================================================
 
@@ -2509,7 +2562,11 @@ export default function App() {
         />
 
 
-       <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain"> 
+        <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+
+          {/* =================================================
+              HOME
+              ================================================= */}
 
           {currentTab ===
             'home' && (
@@ -2559,6 +2616,40 @@ export default function App() {
           )}
 
 
+          {/* =================================================
+              DEDICATED CHATGPT-STYLE AI CHAT
+              ================================================= */}
+
+          {currentTab ===
+            'chat' && (
+            <ChatView
+              user={
+                user
+              }
+
+              chatHistory={
+                chatHistory
+              }
+
+              isLoading={
+                isLoadingAI
+              }
+
+              onSendMessage={
+                handleSendMessage
+              }
+
+              onNewChat={
+                handleNewChat
+              }
+            />
+          )}
+
+
+          {/* =================================================
+              SEARCH
+              ================================================= */}
+
           {currentTab ===
             'search' && (
             <SearchView
@@ -2581,6 +2672,10 @@ export default function App() {
           )}
 
 
+          {/* =================================================
+              LEARN
+              ================================================= */}
+
           {currentTab ===
             'learn' && (
             <LearnView
@@ -2598,6 +2693,10 @@ export default function App() {
             />
           )}
 
+
+          {/* =================================================
+              PLANNER
+              ================================================= */}
 
           {currentTab ===
             'planner' && (
@@ -2624,6 +2723,10 @@ export default function App() {
             />
           )}
 
+
+          {/* =================================================
+              PROFILE
+              ================================================= */}
 
           {currentTab ===
             'profile' && (
@@ -2689,6 +2792,10 @@ export default function App() {
         </main>
 
 
+        {/* ===================================================
+            BOTTOM NAVIGATION
+            =================================================== */}
+
         <BottomNav
           currentTab={
             currentTab
@@ -2728,6 +2835,10 @@ export default function App() {
         />
 
 
+        {/* ===================================================
+            VOICE ASSISTANT
+            =================================================== */}
+
         <VoiceAssistantModal
           isOpen={
             isVoiceOpen
@@ -2757,6 +2868,10 @@ export default function App() {
         />
 
 
+        {/* ===================================================
+            TRANSLATOR
+            =================================================== */}
+
         <TranslatorModal
           isOpen={
             isTranslatorOpen
@@ -2769,6 +2884,10 @@ export default function App() {
           }
         />
 
+
+        {/* ===================================================
+            SMART ACTION
+            =================================================== */}
 
         <SmartActionModal
           action={
@@ -2786,6 +2905,10 @@ export default function App() {
           }
         />
 
+
+        {/* ===================================================
+            ONBOARDING
+            =================================================== */}
 
         <OnboardingModal
           isOpen={
