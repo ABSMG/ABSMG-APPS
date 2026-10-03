@@ -1,6 +1,7 @@
 import express, {
   Request,
   Response,
+  NextFunction,
 } from "express";
 
 import path from "path";
@@ -31,6 +32,38 @@ const app = express();
 const PORT =
   Number(process.env.PORT) || 3000;
 
+/*
+ * Render and Capacitor/Android normally run through a
+ * reverse proxy. This allows req.ip to work more reliably
+ * behind the production proxy.
+ */
+app.set(
+  "trust proxy",
+  1
+);
+
+/* =========================================================
+   PUBLIC APPLICATION URL
+========================================================= */
+
+function getPublicAppUrl(): string {
+  const configured =
+    String(
+      process.env.APP_URL ||
+        "https://absmg-apps.onrender.com"
+    )
+      .trim()
+      .replace(/\/+$/, "");
+
+  return (
+    configured ||
+    "https://absmg-apps.onrender.com"
+  );
+}
+
+const PUBLIC_APP_URL =
+  getPublicAppUrl();
+
 /* =========================================================
    AI CONFIGURATION
    GOOGLE GEMINI + OPENROUTER + GROQ FALLBACK
@@ -52,10 +85,15 @@ const PORT =
  */
 
 const AI_TIMEOUT_MS = 15000;
+
 const SEARCH_TIMEOUT_MS = 8000;
+
 const OPENROUTER_TIMEOUT_MS = 12000;
+
 const GROQ_TIMEOUT_MS = 10000;
-const GEMINI_COOLDOWN_MS = 15 * 60 * 1000;
+
+const GEMINI_COOLDOWN_MS =
+  15 * 60 * 1000;
 
 const GEMINI_MODEL =
   String(
@@ -87,7 +125,12 @@ const GROQ_URL =
 
 const MAX_MESSAGE_LENGTH = 4000;
 
-const MAX_HISTORY_MESSAGES = 6;
+/*
+ * Increased from 6 to 12 so Nodysom AI can maintain more
+ * useful conversation context and behave more naturally
+ * during ChatGPT-style conversations.
+ */
+const MAX_HISTORY_MESSAGES = 12;
 
 const MAX_HISTORY_ITEM_LENGTH = 1200;
 
@@ -161,6 +204,103 @@ function markGeminiTemporarilyUnavailable(
 }
 
 /* =========================================================
+   SECURITY / CORS HEADERS
+========================================================= */
+
+/*
+ * Capacitor Android applications can communicate with the
+ * Render backend from an app origin.
+ *
+ * ALLOWED_ORIGIN may be configured in Render environment
+ * variables when a stricter production origin is desired.
+ *
+ * Default "*" keeps the API usable by the Android app,
+ * local Vite development and the public website.
+ *
+ * No credential-based browser authentication is enabled
+ * here, so wildcard CORS is safe for this API architecture.
+ */
+
+app.use(
+  (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    const allowedOrigin =
+      String(
+        process.env.ALLOWED_ORIGIN ||
+          "*"
+      ).trim();
+
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      allowedOrigin
+    );
+
+    res.setHeader(
+      "Vary",
+      "Origin"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+
+    res.setHeader(
+      "Access-Control-Max-Age",
+      "86400"
+    );
+
+    if (
+      req.method ===
+      "OPTIONS"
+    ) {
+      return res.sendStatus(
+        204
+      );
+    }
+
+    next();
+  }
+);
+
+/* =========================================================
+   SECURITY HEADERS
+========================================================= */
+
+app.use(
+  (
+    _req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    res.setHeader(
+      "X-Content-Type-Options",
+      "nosniff"
+    );
+
+    res.setHeader(
+      "Referrer-Policy",
+      "strict-origin-when-cross-origin"
+    );
+
+    res.setHeader(
+      "X-Frame-Options",
+      "SAMEORIGIN"
+    );
+
+    next();
+  }
+);
+
+/* =========================================================
    BODY PARSER
 ========================================================= */
 
@@ -174,31 +314,43 @@ app.use(
    SEO FILES
 ========================================================= */
 
-app.get("/robots.txt", (_req, res) => {
-  res
-    .type("text/plain")
-    .send(
+app.get(
+  "/robots.txt",
+  (
+    _req,
+    res
+  ) => {
+    res
+      .type("text/plain")
+      .send(
 `User-agent: *
 Allow: /
 
-Sitemap: https://absmg-apps.onrender.com/sitemap.xml`
-    );
-});
+Sitemap: ${PUBLIC_APP_URL}/sitemap.xml`
+      );
+  }
+);
 
-app.get("/sitemap.xml", (_req, res) => {
-  res
-    .type("application/xml")
-    .send(
+app.get(
+  "/sitemap.xml",
+  (
+    _req,
+    res
+  ) => {
+    res
+      .type("application/xml")
+      .send(
 `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://absmg-apps.onrender.com/</loc>
+    <loc>${PUBLIC_APP_URL}/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
 </urlset>`
-    );
-});
+      );
+  }
+);
 
 /* =========================================================
    RATE LIMITING
@@ -212,29 +364,79 @@ const rateLimitMap = new Map<
   }
 >();
 
+/*
+ * Clean expired entries periodically so a long-running
+ * Render server does not accumulate client IPs forever.
+ */
+const rateLimitCleanupTimer =
+  setInterval(
+    () => {
+      const now =
+        Date.now();
+
+      for (
+        const [
+          key,
+          entry,
+        ] of rateLimitMap.entries()
+      ) {
+        if (
+          now >
+          entry.resetTime
+        ) {
+          rateLimitMap.delete(
+            key
+          );
+        }
+      }
+    },
+    RATE_LIMIT_WINDOW_MS
+  );
+
+/*
+ * Do not allow the cleanup timer itself to keep Node alive
+ * if the rest of the application has already stopped.
+ */
+if (
+  typeof (
+    rateLimitCleanupTimer as any
+  )?.unref ===
+  "function"
+) {
+  (
+    rateLimitCleanupTimer as any
+  ).unref();
+}
+
 function checkRateLimit(
   req: Request,
   res: Response,
-  next: () => void
+  next: NextFunction
 ) {
   const ip =
-    req.ip || "global-client";
+    req.ip ||
+    "global-client";
 
-  const now = Date.now();
+  const now =
+    Date.now();
 
   const entry =
     rateLimitMap.get(ip);
 
   if (
     !entry ||
-    now > entry.resetTime
+    now >
+      entry.resetTime
   ) {
-    rateLimitMap.set(ip, {
-      count: 1,
-      resetTime:
-        now +
-        RATE_LIMIT_WINDOW_MS,
-    });
+    rateLimitMap.set(
+      ip,
+      {
+        count: 1,
+        resetTime:
+          now +
+          RATE_LIMIT_WINDOW_MS,
+      }
+    );
 
     return next();
   }
@@ -268,26 +470,23 @@ app.use(
 
 function getGeminiKey(): string {
   return String(
-    process.env.GEMINI_API_KEY || ""
+    process.env.GEMINI_API_KEY ||
+      ""
   ).trim();
 }
 
 function getOpenRouterKey(): string {
   return String(
-    process.env.OPENROUTER_API_KEY || ""
+    process.env.OPENROUTER_API_KEY ||
+      ""
   ).trim();
 }
+
 function getGroqKey(): string {
-  return String(process.env.GROQ_API_KEY || "").trim();
-}
-
-function hasGroqKey(): boolean {
-  const key = getGroqKey();
-
-  return (
-    key.length > 0 &&
-    !isPlaceholderKey(key)
-  );
+  return String(
+    process.env.GROQ_API_KEY ||
+      ""
+  ).trim();
 }
 
 function isPlaceholderKey(
@@ -295,9 +494,19 @@ function isPlaceholderKey(
 ): boolean {
   return (
     !apiKey ||
-    /^(YOUR_|MY_|PASTE_|CHANGE_ME)/i.test(
+    /^(YOUR_|MY_|PASTE_|CHANGE_ME|REPLACE_|EXAMPLE_|YOUR-)/i.test(
       apiKey
     )
+  );
+}
+
+function hasGroqKey(): boolean {
+  const key =
+    getGroqKey();
+
+  return (
+    key.length > 0 &&
+    !isPlaceholderKey(key)
   );
 }
 
@@ -320,8 +529,6 @@ function hasOpenRouterKey(): boolean {
     !isPlaceholderKey(key)
   );
 }
-
-
 
 function hasAIProvider(): boolean {
   return (
@@ -374,7 +581,9 @@ function safeJsonStringify(
   value: unknown
 ): string {
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(
+      value
+    );
   } catch {
     return "";
   }
@@ -397,31 +606,43 @@ async function withTimeout<T>(
   timeoutMs = AI_TIMEOUT_MS
 ): Promise<T> {
   let timeoutId:
-    | ReturnType<typeof setTimeout>
+    | ReturnType<
+        typeof setTimeout
+      >
     | undefined;
 
   const timeoutPromise =
     new Promise<never>(
-      (_, reject) => {
+      (
+        _,
+        reject
+      ) => {
         timeoutId =
-          setTimeout(() => {
-            reject(
-              new Error(
-                `AI request timed out after ${timeoutMs}ms.`
-              )
-            );
-          }, timeoutMs);
+          setTimeout(
+            () => {
+              reject(
+                new Error(
+                  `AI request timed out after ${timeoutMs}ms.`
+                )
+              );
+            },
+            timeoutMs
+          );
       }
     );
 
   try {
-    return await Promise.race([
-      promise,
-      timeoutPromise,
-    ]);
+    return await Promise.race(
+      [
+        promise,
+        timeoutPromise,
+      ]
+    );
   } finally {
     if (timeoutId) {
-      clearTimeout(timeoutId);
+      clearTimeout(
+        timeoutId
+      );
     }
   }
 }
@@ -444,9 +665,12 @@ async function fetchWithTimeout(
     new AbortController();
 
   const timeoutId =
-    setTimeout(() => {
-      controller.abort();
-    }, timeoutMs);
+    setTimeout(
+      () => {
+        controller.abort();
+      },
+      timeoutMs
+    );
 
   try {
     return await fetch(
@@ -460,7 +684,8 @@ async function fetchWithTimeout(
   } catch (error) {
     if (
       error instanceof Error &&
-      error.name === "AbortError"
+      error.name ===
+        "AbortError"
     ) {
       throw new Error(
         `AI request timed out after ${timeoutMs}ms.`
@@ -469,7 +694,9 @@ async function fetchWithTimeout(
 
     throw error;
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(
+      timeoutId
+    );
   }
 }
 
@@ -479,27 +706,43 @@ async function fetchWithTimeout(
 
 function normalizeHistory(
   history: unknown
-) {
-  if (!Array.isArray(history)) {
+): Array<{
+  role:
+    | "User"
+    | "Nodysom AI";
+
+  content: string;
+}> {
+  if (
+    !Array.isArray(history)
+  ) {
     return [];
   }
 
   return history
-    .slice(-MAX_HISTORY_MESSAGES)
-    .map((item: any) => ({
-      role:
-        item?.role === "user"
-          ? "User"
-          : "Nodysom AI",
+    .slice(
+      -MAX_HISTORY_MESSAGES
+    )
+    .map(
+      (item: any) => ({
+        role:
+          item?.role ===
+          "user"
+            ? "User"
+            : "Nodysom AI",
 
-      content: cleanText(
-        item?.content,
-        MAX_HISTORY_ITEM_LENGTH
-      ),
-    }))
+        content:
+          cleanText(
+            item?.content,
+            MAX_HISTORY_ITEM_LENGTH
+          ),
+      })
+    )
     .filter(
       (item) =>
-        Boolean(item.content)
+        Boolean(
+          item.content
+        )
     );
 }
 
@@ -510,19 +753,29 @@ function normalizeHistory(
 function normalizeMemories(
   memories: unknown
 ): string[] {
-  if (!Array.isArray(memories)) {
+  if (
+    !Array.isArray(memories)
+  ) {
     return [];
   }
 
+  /*
+   * Keep the newest items when the frontend stores memories
+   * chronologically.
+   */
   return memories
-    .slice(0, MAX_MEMORY_ITEMS)
-    .map((item: any) =>
-      cleanText(
-        typeof item === "string"
-          ? item
-          : item?.content,
-        MAX_MEMORY_LENGTH
-      )
+    .slice(
+      -MAX_MEMORY_ITEMS
+    )
+    .map(
+      (item: any) =>
+        cleanText(
+          typeof item ===
+            "string"
+            ? item
+            : item?.content,
+          MAX_MEMORY_LENGTH
+        )
     )
     .filter(Boolean);
 }
@@ -545,13 +798,23 @@ function buildAgentContext(
     );
 
   const profile =
-    (request as any).userProfile;
+    (request as any)
+      .userProfile;
+
+  const requestLanguage =
+    cleanText(
+      (request as any)
+        ?.language,
+      50
+    );
 
   const historyText =
     history.length > 0
       ? history
           .map(
-            (item: any) =>
+            (
+              item
+            ) =>
               `${item.role}: ${item.content}`
           )
           .join("\n")
@@ -559,7 +822,9 @@ function buildAgentContext(
 
   const memoryText =
     memories.length > 0
-      ? memories.join("; ")
+      ? memories.join(
+          "; "
+        )
       : "No stored memories.";
 
   const profileText =
@@ -573,6 +838,7 @@ Name: ${cleanText(
 
 Preferred language: ${cleanText(
   profile.preferredLanguage ||
+    requestLanguage ||
     "en",
   30
 )}
@@ -582,6 +848,47 @@ Goals: ${cleanText(
     "general productivity",
   500
 )}
+
+Country: ${cleanText(
+  profile.country ||
+    "",
+  100
+)}
+
+Tier: ${cleanText(
+  profile.tier ||
+    "",
+  50
+)}
+
+Low-data mode: ${
+  Boolean(
+    profile.lowDataMode
+  )
+    ? "enabled"
+    : "disabled"
+}
+
+Interests: ${
+  Array.isArray(
+    profile.interests
+  )
+    ? profile.interests
+        .map(
+          (item: unknown) =>
+            cleanText(
+              item,
+              100
+            )
+        )
+        .filter(Boolean)
+        .join(", ")
+    : cleanText(
+        profile.interests ||
+          "",
+        500
+      )
+}
 `
       : "No profile information.";
 
@@ -589,6 +896,7 @@ Goals: ${cleanText(
     historyText,
     memoryText,
     profileText,
+    requestLanguage,
   };
 }
 
@@ -613,7 +921,9 @@ async function callGemini(
     );
   }
 
-  if (isPlaceholderKey(apiKey)) {
+  if (
+    isPlaceholderKey(apiKey)
+  ) {
     throw new Error(
       "GEMINI_API_KEY is still a placeholder."
     );
@@ -626,20 +936,28 @@ async function callGemini(
 
   const systemMessage =
     messages.find(
-      (message) =>
-        message.role === "system"
+      (
+        message
+      ) =>
+        message.role ===
+        "system"
     );
 
   const nonSystemMessages =
     messages.filter(
-      (message) =>
-        message.role !== "system"
+      (
+        message
+      ) =>
+        message.role !==
+        "system"
     );
 
   const conversationText =
     nonSystemMessages
       .map(
-        (message) => {
+        (
+          message
+        ) => {
           const role =
             message.role ===
             "assistant"
@@ -649,7 +967,9 @@ async function callGemini(
           return `${role}: ${message.content}`;
         }
       )
-      .join("\n\n");
+      .join(
+        "\n\n"
+      );
 
   const input =
     conversationText ||
@@ -659,24 +979,25 @@ async function callGemini(
     options?.timeoutMs ||
     AI_TIMEOUT_MS;
 
-  const interactionRequest: any = {
-    model:
-      GEMINI_MODEL,
+  const interactionRequest:
+    any = {
+      model:
+        GEMINI_MODEL,
 
-    input,
+      input,
 
-    generation_config: {
-      max_output_tokens:
-        options?.maxTokens ||
-        DEFAULT_MAX_TOKENS,
+      generation_config: {
+        max_output_tokens:
+          options?.maxTokens ||
+          DEFAULT_MAX_TOKENS,
 
-      /*
-       * Low thinking keeps normal responses responsive.
-       */
-      thinking_level:
-        "low",
-    },
-  };
+        /*
+         * Low thinking keeps normal responses responsive.
+         */
+        thinking_level:
+          "low",
+      },
+    };
 
   if (
     systemMessage?.content
@@ -685,13 +1006,16 @@ async function callGemini(
       systemMessage.content;
   }
 
-  if (options?.json) {
-    interactionRequest.response_format = {
-      type: "text",
+  if (
+    options?.json
+  ) {
+    interactionRequest.response_format =
+      {
+        type: "text",
 
-      mime_type:
-        "application/json",
-    };
+        mime_type:
+          "application/json",
+      };
   }
 
   const interaction =
@@ -748,19 +1072,27 @@ async function callOpenRouter(
     );
   }
 
-  if (isPlaceholderKey(apiKey)) {
+  if (
+    isPlaceholderKey(apiKey)
+  ) {
     throw new Error(
       "OPENROUTER_API_KEY is still a placeholder."
     );
   }
 
-  const body: Record<string, unknown> = {
+  const body:
+    Record<
+      string,
+      unknown
+    > = {
     model:
       OPENROUTER_MODEL,
 
     messages:
       messages.map(
-        (message) => ({
+        (
+          message
+        ) => ({
           role:
             message.role,
 
@@ -776,16 +1108,21 @@ async function callOpenRouter(
 
   if (
     options?.tools &&
-    options.tools.length > 0
+    options.tools.length >
+      0
   ) {
     body.tools =
       options.tools;
   }
 
-  if (options?.json) {
-    body.response_format = {
-      type: "json_object",
-    };
+  if (
+    options?.json
+  ) {
+    body.response_format =
+      {
+        type:
+          "json_object",
+      };
   }
 
   const timeoutMs =
@@ -796,17 +1133,15 @@ async function callOpenRouter(
     await fetchWithTimeout(
       OPENROUTER_URL,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           Authorization:
             `Bearer ${apiKey}`,
 
           "HTTP-Referer":
-            String(
-              process.env.APP_URL ||
-              "https://absmg-apps.onrender.com"
-            ),
+            PUBLIC_APP_URL,
 
           "X-Title":
             "Nodysom AI",
@@ -816,7 +1151,9 @@ async function callOpenRouter(
         },
 
         body:
-          JSON.stringify(body),
+          JSON.stringify(
+            body
+          ),
       },
       timeoutMs
     );
@@ -824,21 +1161,27 @@ async function callOpenRouter(
   const rawBody =
     await response.text();
 
-  let data: any = null;
+  let data:
+    any = null;
 
   try {
     data =
-      JSON.parse(rawBody);
+      JSON.parse(
+        rawBody
+      );
   } catch {
     data = null;
   }
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
     const message =
       cleanText(
-        data?.error?.message ||
-        data?.message ||
-        rawBody,
+        data?.error
+          ?.message ||
+          data?.message ||
+          rawBody,
         1500
       );
 
@@ -847,36 +1190,82 @@ async function callOpenRouter(
     );
   }
 
+  const messageData =
+    data?.choices?.[0]
+      ?.message;
+
   const content =
-    data?.choices?.[0]?.message?.content;
+    messageData?.content;
 
   let text = "";
 
-  if (typeof content === "string") {
-    text = content;
+  if (
+    typeof content ===
+    "string"
+  ) {
+    text =
+      content;
   } else if (
-    Array.isArray(content)
+    Array.isArray(
+      content
+    )
   ) {
     text =
       content
         .map(
-          (item: any) =>
-            typeof item === "string"
+          (
+            item: any
+          ) =>
+            typeof item ===
+            "string"
               ? item
-              : item?.text || ""
+              : item?.text ||
+                ""
         )
         .join("\n");
   } else if (
     content &&
-    typeof content === "object"
+    typeof content ===
+      "object"
   ) {
     text =
       cleanText(
-        (content as any).text ||
-        (content as any).content ||
-        "",
+        (content as any)
+          .text ||
+          (content as any)
+            .content ||
+          "",
         30000
       );
+  }
+
+  /*
+   * Some OpenAI-compatible providers can return an empty
+   * content field while exposing a useful tool call.
+   * Keep the fallback extraction so the response does not
+   * become unnecessarily empty.
+   */
+  if (
+    !text &&
+    Array.isArray(
+      messageData?.tool_calls
+    )
+  ) {
+    text =
+      messageData.tool_calls
+        .map(
+          (
+            toolCall: any
+          ) =>
+            cleanText(
+              toolCall
+                ?.function
+                ?.arguments,
+              5000
+            )
+        )
+        .filter(Boolean)
+        .join("\n");
   }
 
   text =
@@ -924,19 +1313,27 @@ async function callGroq(
     );
   }
 
-  if (isPlaceholderKey(apiKey)) {
+  if (
+    isPlaceholderKey(apiKey)
+  ) {
     throw new Error(
       "GROQ_API_KEY is still a placeholder."
     );
   }
 
-  const body: Record<string, unknown> = {
+  const body:
+    Record<
+      string,
+      unknown
+    > = {
     model:
       GROQ_MODEL,
 
     messages:
       messages.map(
-        (message) => ({
+        (
+          message
+        ) => ({
           role:
             message.role,
 
@@ -955,10 +1352,14 @@ async function callGroq(
    * formatting for supported models.
    */
 
-  if (options?.json) {
-    body.response_format = {
-      type: "json_object",
-    };
+  if (
+    options?.json
+  ) {
+    body.response_format =
+      {
+        type:
+          "json_object",
+      };
   }
 
   const timeoutMs =
@@ -969,7 +1370,8 @@ async function callGroq(
     await fetchWithTimeout(
       GROQ_URL,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           Authorization:
@@ -983,7 +1385,9 @@ async function callGroq(
         },
 
         body:
-          JSON.stringify(body),
+          JSON.stringify(
+            body
+          ),
       },
       timeoutMs
     );
@@ -991,21 +1395,27 @@ async function callGroq(
   const rawBody =
     await response.text();
 
-  let data: any = null;
+  let data:
+    any = null;
 
   try {
     data =
-      JSON.parse(rawBody);
+      JSON.parse(
+        rawBody
+      );
   } catch {
     data = null;
   }
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
     const message =
       cleanText(
-        data?.error?.message ||
-        data?.message ||
-        rawBody,
+        data?.error
+          ?.message ||
+          data?.message ||
+          rawBody,
         1500
       );
 
@@ -1014,34 +1424,51 @@ async function callGroq(
     );
   }
 
+  const messageData =
+    data?.choices?.[0]
+      ?.message;
+
   const content =
-    data?.choices?.[0]?.message?.content;
+    messageData?.content;
 
   let text = "";
 
-  if (typeof content === "string") {
-    text = content;
+  if (
+    typeof content ===
+    "string"
+  ) {
+    text =
+      content;
   } else if (
-    Array.isArray(content)
+    Array.isArray(
+      content
+    )
   ) {
     text =
       content
         .map(
-          (item: any) =>
-            typeof item === "string"
+          (
+            item: any
+          ) =>
+            typeof item ===
+            "string"
               ? item
-              : item?.text || ""
+              : item?.text ||
+                ""
         )
         .join("\n");
   } else if (
     content &&
-    typeof content === "object"
+    typeof content ===
+      "object"
   ) {
     text =
       cleanText(
-        (content as any).text ||
-        (content as any).content ||
-        "",
+        (content as any)
+          .text ||
+          (content as any)
+            .content ||
+          "",
         30000
       );
   }
@@ -1161,7 +1588,9 @@ async function callAI(
    * ================================================
    */
 
-  if (hasOpenRouterKey()) {
+  if (
+    hasOpenRouterKey()
+  ) {
     try {
       console.log(
         "[Nodysom AI] Trying OpenRouter fallback..."
@@ -1203,7 +1632,9 @@ async function callAI(
    * unavailable.
    */
 
-  if (hasGroqKey()) {
+  if (
+    hasGroqKey()
+  ) {
     try {
       console.log(
         "[Nodysom AI] Trying Groq fallback..."
@@ -1272,8 +1703,11 @@ function parseModelJson(
 
     if (
       parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
+      typeof parsed ===
+        "object" &&
+      !Array.isArray(
+        parsed
+      )
     ) {
       return parsed as JsonRecord;
     }
@@ -1299,12 +1733,17 @@ function parseModelJson(
 
   try {
     const parsed =
-      JSON.parse(cleaned);
+      JSON.parse(
+        cleaned
+      );
 
     if (
       parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
+      typeof parsed ===
+        "object" &&
+      !Array.isArray(
+        parsed
+      )
     ) {
       return parsed as JsonRecord;
     }
@@ -1318,14 +1757,19 @@ function parseModelJson(
    */
 
   const firstBrace =
-    cleaned.indexOf("{");
+    cleaned.indexOf(
+      "{"
+    );
 
   const lastBrace =
-    cleaned.lastIndexOf("}");
+    cleaned.lastIndexOf(
+      "}"
+    );
 
   if (
     firstBrace >= 0 &&
-    lastBrace > firstBrace
+    lastBrace >
+      firstBrace
   ) {
     const possibleJson =
       cleaned.slice(
@@ -1341,8 +1785,11 @@ function parseModelJson(
 
       if (
         parsed &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed)
+        typeof parsed ===
+          "object" &&
+        !Array.isArray(
+          parsed
+        )
       ) {
         return parsed as JsonRecord;
       }
@@ -1366,6 +1813,7 @@ function buildAgentSystemInstruction(
     historyText,
     memoryText,
     profileText,
+    requestLanguage,
   } =
     buildAgentContext(
       request
@@ -1376,8 +1824,13 @@ You are Nodysom AI.
 
 You are a general-purpose AI assistant and agent.
 
+You should behave naturally like a capable modern
+conversational AI assistant while respecting the
+application's agent protocol.
+
 You can help with legitimate tasks including:
 
+- general conversation
 - education
 - scholarships
 - jobs
@@ -1390,6 +1843,9 @@ You can help with legitimate tasks including:
 - research
 - explanations
 - general questions
+- daily planning
+- time/date questions
+- task organization
 
 ==================================================
 IMPORTANT AGENT RULE
@@ -1423,6 +1879,10 @@ calculator
 time
 text_stats
 
+If the user asks for the current time/date and the
+time tool is available, use the time tool instead of
+inventing the current time.
+
 ==================================================
 TOOL RESULT
 ==================================================
@@ -1448,6 +1908,10 @@ If no tool is needed, return ONLY valid JSON:
   "toolCall": null
 }
 
+The "reply" should sound natural and conversational.
+
+Do not mention this internal JSON protocol to the user.
+
 ==================================================
 SMART ACTIONS
 ==================================================
@@ -1466,7 +1930,8 @@ something, you may create a detectedAction proposal.
 A detectedAction is ONLY a proposal.
 
 Never claim that an action has already been saved,
-scheduled, created, or completed.
+scheduled, created, or completed unless an actual
+application tool confirms that operation.
 
 Allowed action types:
 
@@ -1490,9 +1955,16 @@ Do not create memories from ordinary questions.
 LANGUAGE
 ==================================================
 
+Preferred/requested language:
+
+${requestLanguage || "en"}
+
 Respect the user's preferred language.
 
 If the user writes in Swahili, respond in Swahili
+unless another language is requested.
+
+If the user writes in English, respond in English
 unless another language is requested.
 
 ==================================================
@@ -1529,11 +2001,14 @@ async function generateAgentAnswer(
       MAX_MESSAGE_LENGTH
     );
 
-  if (!hasAIProvider()) {
+  if (
+    !hasAIProvider()
+  ) {
     return {
-      reply: toolResult
-        ? `Tool result: ${toolResult}`
-        : `I received your request: "${message}". No AI provider is connected yet.`,
+      reply:
+        toolResult
+          ? `Tool result: ${toolResult}`
+          : `I received your request: "${message}". No AI provider is connected yet.`,
 
       detectedAction:
         null,
@@ -1555,43 +2030,29 @@ async function generateAgentAnswer(
   const messages:
     ChatMessage[] = [
       {
-        role: "system",
+        role:
+          "system",
+
         content:
           systemInstruction,
       },
 
       {
-        role: "user",
+        role:
+          "user",
+
         content:
           message,
       },
     ];
-
-  if (toolResult) {
-    messages.push({
-      role: "user",
-
-      content:
-        `
-A local tool was executed.
-
-Use this tool result to answer the user's original request.
-
-TOOL RESULT:
-${toolResult}
-
-Return the final answer as valid JSON.
-If another local tool is required, return a toolCall instead.
-`,
-    });
-  }
 
   try {
     const response =
       await callAI(
         messages,
         {
-          json: true,
+          json:
+            true,
 
           maxTokens:
             DEFAULT_MAX_TOKENS,
@@ -1623,7 +2084,9 @@ If another local tool is required, return a toolCall instead.
     }
 
     const parsed =
-      parseModelJson(raw);
+      parseModelJson(
+        raw
+      );
 
     if (!parsed) {
       return {
@@ -1652,17 +2115,21 @@ If another local tool is required, return a toolCall instead.
       toolCall &&
       typeof toolCall ===
         "object" &&
-      !Array.isArray(toolCall)
+      !Array.isArray(
+        toolCall
+      )
     ) {
       const requestedTool =
         cleanText(
-          (toolCall as any).tool,
+          (toolCall as any)
+            .tool,
           100
         );
 
       const input =
         cleanText(
-          (toolCall as any).input,
+          (toolCall as any)
+            .input,
           MAX_MESSAGE_LENGTH
         );
 
@@ -1750,6 +2217,11 @@ If another local tool is required, return a toolCall instead.
         ) &&
         title
       ) {
+        const amountValue =
+          Number(
+            action.amount
+          );
+
         detectedAction = {
           type:
             action.type,
@@ -1779,13 +2251,9 @@ If another local tool is required, return a toolCall instead.
 
           amount:
             Number.isFinite(
-              Number(
-                action.amount
-              )
+              amountValue
             )
-              ? Number(
-                  action.amount
-                )
+              ? amountValue
               : undefined,
 
           confirmedRequired:
@@ -1823,7 +2291,9 @@ If another local tool is required, return a toolCall instead.
       errorMessage
     );
 
-    if (toolResult) {
+    if (
+      toolResult
+    ) {
       return {
         reply:
           `Tool result: ${toolResult}`,
@@ -1877,7 +2347,8 @@ app.get(
       );
 
     const hasUsableGeminiKey =
-      trimmedGeminiKey.length > 0 &&
+      trimmedGeminiKey.length >
+        0 &&
       !geminiPlaceholderDetected;
 
     const rawOpenRouterKey =
@@ -1892,7 +2363,8 @@ app.get(
       );
 
     const hasUsableOpenRouterKey =
-      trimmedOpenRouterKey.length > 0 &&
+      trimmedOpenRouterKey.length >
+        0 &&
       !openRouterPlaceholderDetected;
 
     const rawGroqKey =
@@ -1907,7 +2379,8 @@ app.get(
       );
 
     const hasUsableGroqKey =
-      trimmedGroqKey.length > 0 &&
+      trimmedGroqKey.length >
+        0 &&
       !groqPlaceholderDetected;
 
     let activeProvider =
@@ -1938,6 +2411,9 @@ app.get(
       appName:
         "Nodysom AI",
 
+      developer:
+        "ANORD BONIPHACE SOMEKE",
+
       tagline:
         "Plan Your Day. Live Smarter.",
 
@@ -1947,6 +2423,9 @@ app.get(
       production:
         process.env.NODE_ENV ===
         "production",
+
+      publicUrl:
+        PUBLIC_APP_URL,
 
       aiProvider:
         activeProvider,
@@ -2027,56 +2506,65 @@ app.get(
             "/api/ai/search",
         },
 
-      geminiDiagnostics: {
-        environmentVariableExists:
-          rawGeminiKey.length > 0,
+      geminiDiagnostics:
+        {
+          environmentVariableExists:
+            rawGeminiKey.length >
+            0,
 
-        trimmedValueExists:
-          trimmedGeminiKey.length > 0,
+          trimmedValueExists:
+            trimmedGeminiKey.length >
+            0,
 
-        keyLength:
-          trimmedGeminiKey.length,
+          keyLength:
+            trimmedGeminiKey.length,
 
-        placeholderDetected:
-          geminiPlaceholderDetected,
+          placeholderDetected:
+            geminiPlaceholderDetected,
 
-        usableKeyDetected:
-          hasUsableGeminiKey,
-      },
+          usableKeyDetected:
+            hasUsableGeminiKey,
+        },
 
-      openRouterDiagnostics: {
-        environmentVariableExists:
-          rawOpenRouterKey.length > 0,
+      openRouterDiagnostics:
+        {
+          environmentVariableExists:
+            rawOpenRouterKey.length >
+            0,
 
-        trimmedValueExists:
-          trimmedOpenRouterKey.length > 0,
+          trimmedValueExists:
+            trimmedOpenRouterKey.length >
+            0,
 
-        keyLength:
-          trimmedOpenRouterKey.length,
+          keyLength:
+            trimmedOpenRouterKey.length,
 
-        placeholderDetected:
-          openRouterPlaceholderDetected,
+          placeholderDetected:
+            openRouterPlaceholderDetected,
 
-        usableKeyDetected:
-          hasUsableOpenRouterKey,
-      },
+          usableKeyDetected:
+            hasUsableOpenRouterKey,
+        },
 
-      groqDiagnostics: {
-        environmentVariableExists:
-          rawGroqKey.length > 0,
+      groqDiagnostics:
+        {
+          environmentVariableExists:
+            rawGroqKey.length >
+            0,
 
-        trimmedValueExists:
-          trimmedGroqKey.length > 0,
+          trimmedValueExists:
+            trimmedGroqKey.length >
+            0,
 
-        keyLength:
-          trimmedGroqKey.length,
+          keyLength:
+            trimmedGroqKey.length,
 
-        placeholderDetected:
-          groqPlaceholderDetected,
+          placeholderDetected:
+            groqPlaceholderDetected,
 
-        usableKeyDetected:
-          hasUsableGroqKey,
-      },
+          usableKeyDetected:
+            hasUsableGroqKey,
+        },
 
       agent: {
         enabled:
@@ -2148,6 +2636,9 @@ app.post(
         });
       }
 
+      const userProfile =
+        body.userProfile;
+
       const agentRequest:
         AgentRequest =
         {
@@ -2158,33 +2649,111 @@ app.post(
               body.history
             ),
 
+          language:
+            cleanText(
+              body.language ||
+                userProfile
+                  ?.preferredLanguage ||
+                "en",
+              30
+            ),
+
           userProfile:
-            body.userProfile
+            userProfile
               ? {
                   name:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.name,
                       100
                     ),
 
                   preferredLanguage:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.preferredLanguage,
                       30
                     ),
 
                   goals:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.goals,
                       500
                     ),
-                }
+
+                  /*
+                   * These fields are preserved when the
+                   * AgentRequest interface supports them.
+                   */
+                  ...(userProfile
+                    ?.country !==
+                  undefined
+                    ? {
+                        country:
+                          cleanText(
+                            userProfile
+                              ?.country,
+                            100
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.tier !==
+                  undefined
+                    ? {
+                        tier:
+                          cleanText(
+                            userProfile
+                              ?.tier,
+                            50
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.lowDataMode !==
+                  undefined
+                    ? {
+                        lowDataMode:
+                          Boolean(
+                            userProfile
+                              ?.lowDataMode
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.interests !==
+                  undefined
+                    ? {
+                        interests:
+                          Array.isArray(
+                            userProfile
+                              ?.interests
+                          )
+                            ? userProfile.interests
+                                .map(
+                                  (
+                                    item: unknown
+                                  ) =>
+                                    cleanText(
+                                      item,
+                                      100
+                                    )
+                                )
+                                .filter(
+                                  Boolean
+                                )
+                            : cleanText(
+                                userProfile
+                                  ?.interests,
+                                500
+                              ),
+                      }
+                    : {}),
+                } as any
               : undefined,
 
           memories:
@@ -2284,6 +2853,9 @@ app.post(
         });
       }
 
+      const userProfile =
+        body.userProfile;
+
       const agentRequest:
         AgentRequest =
         {
@@ -2294,33 +2866,107 @@ app.post(
               body.history
             ),
 
+          language:
+            cleanText(
+              body.language ||
+                userProfile
+                  ?.preferredLanguage ||
+                "en",
+              30
+            ),
+
           userProfile:
-            body.userProfile
+            userProfile
               ? {
                   name:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.name,
                       100
                     ),
 
                   preferredLanguage:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.preferredLanguage,
                       30
                     ),
 
                   goals:
                     cleanText(
-                      body
-                        .userProfile
+                      userProfile
                         ?.goals,
                       500
                     ),
-                }
+
+                  ...(userProfile
+                    ?.country !==
+                  undefined
+                    ? {
+                        country:
+                          cleanText(
+                            userProfile
+                              ?.country,
+                            100
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.tier !==
+                  undefined
+                    ? {
+                        tier:
+                          cleanText(
+                            userProfile
+                              ?.tier,
+                            50
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.lowDataMode !==
+                  undefined
+                    ? {
+                        lowDataMode:
+                          Boolean(
+                            userProfile
+                              ?.lowDataMode
+                          ),
+                      }
+                    : {}),
+
+                  ...(userProfile
+                    ?.interests !==
+                  undefined
+                    ? {
+                        interests:
+                          Array.isArray(
+                            userProfile
+                              ?.interests
+                          )
+                            ? userProfile.interests
+                                .map(
+                                  (
+                                    item: unknown
+                                  ) =>
+                                    cleanText(
+                                      item,
+                                      100
+                                    )
+                                )
+                                .filter(
+                                  Boolean
+                                )
+                            : cleanText(
+                                userProfile
+                                  ?.interests,
+                                500
+                              ),
+                      }
+                    : {}),
+                } as any
               : undefined,
 
           memories:
@@ -2433,7 +3079,9 @@ function isValidHttpUrl(
   try {
     const url =
       new URL(
-        String(value || "")
+        String(
+          value || ""
+        )
       );
 
     return (
@@ -2453,13 +3101,17 @@ function isValidHttpUrl(
 
 function extractUrlsFromValue(
   value: unknown,
-  found: Map<string, SearchSource>,
+  found: Map<
+    string,
+    SearchSource
+  >,
   depth = 0
 ): void {
   if (
     depth > 7 ||
     value === null ||
-    value === undefined
+    value ===
+      undefined
   ) {
     return;
   }
@@ -2471,7 +3123,8 @@ function extractUrlsFromValue(
   }
 
   if (
-    typeof value === "string"
+    typeof value ===
+    "string"
   ) {
     const urlMatches =
       value.match(
@@ -2479,7 +3132,8 @@ function extractUrlsFromValue(
       ) || [];
 
     for (
-      const rawUrl of urlMatches
+      const rawUrl of
+      urlMatches
     ) {
       const cleanedUrl =
         rawUrl
@@ -2516,10 +3170,13 @@ function extractUrlsFromValue(
   }
 
   if (
-    Array.isArray(value)
+    Array.isArray(
+      value
+    )
   ) {
     for (
-      const item of value
+      const item of
+      value
     ) {
       extractUrlsFromValue(
         item,
@@ -2590,17 +3247,24 @@ function extractUrlsFromValue(
     }
 
     for (
-      const [key, child] of
-      Object.entries(object)
+      const [
+        key,
+        child,
+      ] of Object.entries(
+        object
+      )
     ) {
       /*
        * Never search through sensitive request metadata
        * looking for URLs.
        */
       if (
-        key === "apiKey" ||
-        key === "authorization" ||
-        key === "headers"
+        key ===
+          "apiKey" ||
+        key ===
+          "authorization" ||
+        key ===
+          "headers"
       ) {
         continue;
       }
@@ -2716,7 +3380,9 @@ async function callGeminiSearch(
   }
 
   if (
-    isPlaceholderKey(apiKey)
+    isPlaceholderKey(
+      apiKey
+    )
   ) {
     throw new Error(
       "GEMINI_API_KEY is still a placeholder."
@@ -2771,13 +3437,14 @@ Instructions:
             },
           ],
 
-          generation_config: {
-            max_output_tokens:
-              SEARCH_MAX_TOKENS,
+          generation_config:
+            {
+              max_output_tokens:
+                SEARCH_MAX_TOKENS,
 
-            thinking_level:
-              "low",
-          },
+              thinking_level:
+                "low",
+            },
         } as any,
         {
           timeout:
@@ -2832,7 +3499,9 @@ async function callOpenRouterSearch(
   }
 
   if (
-    isPlaceholderKey(apiKey)
+    isPlaceholderKey(
+      apiKey
+    )
   ) {
     throw new Error(
       "OPENROUTER_API_KEY is still a placeholder."
@@ -2879,7 +3548,8 @@ Rules:
     await callOpenRouter(
       messages,
       {
-        json: false,
+        json:
+          false,
 
         maxTokens:
           SEARCH_MAX_TOKENS,
@@ -2982,9 +3652,13 @@ function buildSearchResult(
 
   const lines =
     summary
-      .split(/\n+/)
+      .split(
+        /\n+/
+      )
       .map(
-        (line) =>
+        (
+          line
+        ) =>
           cleanSearchFact(
             line
           )
@@ -2994,7 +3668,9 @@ function buildSearchResult(
   const verifiedFacts =
     lines
       .filter(
-        (line) =>
+        (
+          line
+        ) =>
           !isSearchHeading(
             line
           ) &&
@@ -3022,13 +3698,19 @@ function buildSearchResult(
           /(?<=[.!?])\s+/
         )
         .map(
-          (sentence) =>
+          (
+            sentence
+          ) =>
             sentence.trim()
         )
         .filter(
-          (sentence) =>
-            sentence.length > 40 &&
-            sentence.length < 600
+          (
+            sentence
+          ) =>
+            sentence.length >
+              40 &&
+            sentence.length <
+              600
         )
         .slice(0, 8);
 
@@ -3133,14 +3815,17 @@ app.post(
             )
           );
 
-        } catch (geminiError) {
+        } catch (
+          geminiError
+        ) {
           markGeminiTemporarilyUnavailable(
             geminiError
           );
 
           console.warn(
             "[Nodysom Search] Gemini web search failed. Trying OpenRouter.",
-            geminiError instanceof Error
+            geminiError instanceof
+              Error
               ? geminiError.message
               : geminiError
           );
@@ -3160,7 +3845,9 @@ app.post(
        * ================================================
        */
 
-      if (hasOpenRouterKey()) {
+      if (
+        hasOpenRouterKey()
+      ) {
         try {
           console.log(
             "[Nodysom Search] Trying OpenRouter Web Search..."
@@ -3190,10 +3877,13 @@ app.post(
             )
           );
 
-        } catch (openRouterError) {
+        } catch (
+          openRouterError
+        ) {
           console.error(
             "[Nodysom Search] OpenRouter web search failed:",
-            openRouterError instanceof Error
+            openRouterError instanceof
+              Error
               ? openRouterError.message
               : openRouterError
           );
@@ -3210,11 +3900,15 @@ app.post(
               "Live web search is temporarily unavailable.",
 
             details:
-              openRouterError instanceof Error
-                ? openRouterError.message
-                : String(
-                    openRouterError
-                  ),
+              process.env.NODE_ENV ===
+              "production"
+                ? undefined
+                : openRouterError instanceof
+                    Error
+                  ? openRouterError.message
+                  : String(
+                      openRouterError
+                    ),
 
             query,
 
@@ -3262,22 +3956,28 @@ app.post(
           ],
       });
 
-    } catch (error: any) {
+    } catch (
+      error: any
+    ) {
       const latency =
         Date.now() -
         startedAt;
 
       console.error(
         `[Nodysom Search] Error after ${latency}ms:`,
-        error instanceof Error
+        error instanceof
+          Error
           ? error.message
           : error
       );
 
       return res.status(500).json({
         error:
-          error?.message ||
-          "Search failed.",
+          process.env.NODE_ENV ===
+          "production"
+            ? "Search failed."
+            : error?.message ||
+              "Search failed.",
 
         query:
           cleanText(
@@ -3313,14 +4013,16 @@ app.post(
 
       const targetLanguage =
         cleanText(
-          req.body?.targetLanguage ||
+          req.body
+            ?.targetLanguage ||
             "en",
           50
         );
 
       const sourceLanguage =
         cleanText(
-          req.body?.sourceLanguage ||
+          req.body
+            ?.sourceLanguage ||
             "auto",
           50
         );
@@ -3332,7 +4034,9 @@ app.post(
         });
       }
 
-      if (!hasAIProvider()) {
+      if (
+        !hasAIProvider()
+      ) {
         return res.status(503).json({
           error:
             "Translation AI is not connected.",
@@ -3391,7 +4095,8 @@ Rules:
         await callAI(
           messages,
           {
-            json: true,
+            json:
+              true,
 
             maxTokens:
               TRANSLATION_MAX_TOKENS,
@@ -3424,7 +4129,9 @@ Rules:
           10000
         );
 
-      if (!translatedText) {
+      if (
+        !translatedText
+      ) {
         return res.status(502).json({
           error:
             "Translation model returned no translated text.",
@@ -3451,22 +4158,49 @@ Rules:
         targetLanguage,
       });
 
-    } catch (error: any) {
+    } catch (
+      error: any
+    ) {
       console.error(
         "[Nodysom Translation] Error:",
-        error instanceof Error
+        error instanceof
+          Error
           ? error.message
           : error
       );
 
       return res.status(500).json({
         error:
-          error?.message ||
-          "Translation failed.",
+          process.env.NODE_ENV ===
+          "production"
+            ? "Translation failed."
+            : error?.message ||
+              "Translation failed.",
       });
     }
   }
 );
+
+/* =========================================================
+   SMART SCHEDULE HELPERS
+========================================================= */
+
+function getTodayISO(): string {
+  const now =
+    new Date();
+
+  return now
+    .toISOString()
+    .split("T")[0];
+}
+
+function isValidScheduleTime(
+  value: unknown
+): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(
+    String(value || "")
+  );
+}
 
 /* =========================================================
    AI SMART SCHEDULE
@@ -3488,9 +4222,7 @@ app.post(
       const date =
         cleanText(
           req.body?.date ||
-            new Date()
-              .toISOString()
-              .split("T")[0],
+            getTodayISO(),
           30
         );
 
@@ -3501,7 +4233,9 @@ app.post(
         });
       }
 
-      if (!hasAIProvider()) {
+      if (
+        !hasAIProvider()
+      ) {
         return res.json({
           schedule: [
             {
@@ -3640,7 +4374,8 @@ ${prompt}
         await callAI(
           messages,
           {
-            json: true,
+            json:
+              true,
 
             maxTokens:
               SCHEDULE_MAX_TOKENS,
@@ -3679,58 +4414,77 @@ ${prompt}
 
       const schedule =
         sourceSchedule
-          .slice(0, 12)
+          .slice(
+            0,
+            12
+          )
           .map(
-            (item: any) => ({
-              time:
-                cleanText(
-                  item?.time,
-                  10
-                ),
+            (
+              item: any
+            ) => {
+              const numericDuration =
+                Number(
+                  item?.durationMinutes
+                );
 
-              title:
-                cleanText(
-                  item?.title,
-                  160
-                ),
+              return {
+                time:
+                  cleanText(
+                    item?.time,
+                    10
+                  ),
 
-              category:
-                cleanText(
-                  item?.category,
-                  60
-                ) ||
-                "General",
+                title:
+                  cleanText(
+                    item?.title,
+                    160
+                  ),
 
-              durationMinutes:
-                Number.isFinite(
-                  Number(
-                    item?.durationMinutes
+                category:
+                  cleanText(
+                    item?.category,
+                    60
+                  ) ||
+                  "General",
+
+                durationMinutes:
+                  Number.isFinite(
+                    numericDuration
                   )
-                )
-                  ? Math.max(
-                      1,
-                      Math.round(
-                        Number(
-                          item.durationMinutes
+                    ? Math.max(
+                        1,
+                        Math.round(
+                          numericDuration
                         )
                       )
-                    )
-                  : undefined,
+                    : undefined,
 
-              notes:
-                cleanText(
-                  item?.notes,
-                  300
-                ),
-            })
+                notes:
+                  cleanText(
+                    item?.notes,
+                    300
+                  ),
+              };
+            }
           )
           .filter(
-            (item: any) =>
-              /^([01]\d|2[0-3]):[0-5]\d$/.test(
+            (
+              item: any
+            ) =>
+              isValidScheduleTime(
                 item.time
               ) &&
               Boolean(
                 item.title
+              )
+          )
+          .sort(
+            (
+              a: any,
+              b: any
+            ) =>
+              a.time.localeCompare(
+                b.time
               )
           );
 
@@ -3756,23 +4510,68 @@ ${prompt}
           false,
       });
 
-    } catch (error: any) {
+    } catch (
+      error: any
+    ) {
       console.error(
         "[Nodysom Smart Schedule] Error:",
-        error instanceof Error
+        error instanceof
+          Error
           ? error.message
           : error
       );
 
       return res.status(500).json({
         error:
-          error?.message ||
-          "Smart schedule generation failed.",
+          process.env.NODE_ENV ===
+          "production"
+            ? "Smart schedule generation failed."
+            : error?.message ||
+              "Smart schedule generation failed.",
 
         schedule:
           [],
       });
     }
+  }
+);
+
+/* =========================================================
+   API 404 HANDLER
+========================================================= */
+
+/*
+ * This must appear BEFORE the production SPA fallback.
+ *
+ * Otherwise a request such as:
+ *
+ * /api/unknown
+ *
+ * could incorrectly receive index.html instead of JSON.
+ */
+
+app.use(
+  "/api",
+  (
+    _req: Request,
+    res: Response
+  ) => {
+    return res.status(404).json({
+      error:
+        "API endpoint not found.",
+
+      app:
+        "Nodysom AI",
+
+      availableEndpoints: [
+        "/api/health",
+        "/api/agent",
+        "/api/ai/assistant",
+        "/api/ai/search",
+        "/api/ai/translate",
+        "/api/ai/smart-schedule",
+      ],
+    });
   }
 );
 
@@ -3821,21 +4620,123 @@ async function startServer() {
       )
     );
 
-    app.get(
-      "*",
+    /*
+     * Express 5 / path-to-regexp can reject the old:
+     *
+     * app.get("*", ...)
+     *
+     * pattern.
+     *
+     * This middleware performs the same SPA fallback
+     * without depending on a wildcard route pattern.
+     */
+    app.use(
       (
-        _req,
-        res
+        req: Request,
+        res: Response,
+        next: NextFunction
       ) => {
-        res.sendFile(
+        if (
+          req.method !==
+          "GET"
+        ) {
+          return next();
+        }
+
+        /*
+         * Do not serve index.html for internal/API routes.
+         * API routes have already been handled above.
+         */
+        if (
+          req.path.startsWith(
+            "/api/"
+          )
+        ) {
+          return next();
+        }
+
+        const indexPath =
           path.join(
             distPath,
             "index.html"
-          )
+          );
+
+        return res.sendFile(
+          indexPath,
+          (
+            error
+          ) => {
+            if (error) {
+              next(error);
+            }
+          }
         );
       }
     );
   }
+
+  /* =======================================================
+     FINAL 404
+  ======================================================= */
+
+  app.use(
+    (
+      _req: Request,
+      res: Response
+    ) => {
+      return res.status(404).json({
+        error:
+          "Page not found.",
+
+        app:
+          "Nodysom AI",
+      });
+    }
+  );
+
+  /* =======================================================
+     FINAL ERROR HANDLER
+  ======================================================= */
+
+  app.use(
+    (
+      error: any,
+      _req: Request,
+      res: Response,
+      _next: NextFunction
+    ) => {
+      console.error(
+        "[Nodysom Server] Unhandled error:",
+        error instanceof
+          Error
+          ? error.message
+          : error
+      );
+
+      if (
+        res.headersSent
+      ) {
+        return;
+      }
+
+      return res.status(500).json({
+        error:
+          process.env.NODE_ENV ===
+          "production"
+            ? "Internal server error."
+            : error instanceof
+                Error
+              ? error.message
+              : String(
+                  error
+                ),
+      });
+    }
+  );
+
+  /* =======================================================
+     START LISTENER
+  ======================================================= */
 
   app.listen(
     PORT,
@@ -3843,6 +4744,10 @@ async function startServer() {
     () => {
       console.log(
         `Nodysom AI running on port ${PORT}`
+      );
+
+      console.log(
+        `[Nodysom AI] Public URL: ${PUBLIC_APP_URL}`
       );
 
       const runtimeGeminiKey =
@@ -3855,19 +4760,22 @@ async function startServer() {
         getGroqKey();
 
       const geminiUsable =
-        runtimeGeminiKey.length > 0 &&
+        runtimeGeminiKey.length >
+          0 &&
         !isPlaceholderKey(
           runtimeGeminiKey
         );
 
       const openRouterUsable =
-        runtimeOpenRouterKey.length > 0 &&
+        runtimeOpenRouterKey.length >
+          0 &&
         !isPlaceholderKey(
           runtimeOpenRouterKey
         );
 
       const groqUsable =
-        runtimeGroqKey.length > 0 &&
+        runtimeGroqKey.length >
+          0 &&
         !isPlaceholderKey(
           runtimeGroqKey
         );
@@ -3914,7 +4822,8 @@ async function startServer() {
 
       console.log(
         `[Nodysom AI] Gemini cooldown: ${Math.round(
-          GEMINI_COOLDOWN_MS / 60000
+          GEMINI_COOLDOWN_MS /
+            60000
         )} minutes`
       );
 
@@ -3931,21 +4840,54 @@ async function startServer() {
       );
 
       console.log(
+        `[Nodysom AI] Agent: enabled`
+      );
+
+      console.log(
+        `[Nodysom AI] Calculator tool: enabled`
+      );
+
+      console.log(
+        `[Nodysom AI] Time tool: enabled`
+      );
+
+      console.log(
+        `[Nodysom AI] Text statistics tool: enabled`
+      );
+
+      console.log(
+        `[Nodysom AI] Android/Capacitor CORS: enabled`
+      );
+
+      console.log(
         `[Nodysom AI] Official website mode: enabled`
+      );
+
+      console.log(
+        `[Nodysom AI] Developer: ANORD BONIPHACE SOMEKE`
       );
     }
   );
 }
 
+/* =========================================================
+   START APPLICATION
+========================================================= */
+
 startServer().catch(
-  (error) => {
+  (
+    error
+  ) => {
     console.error(
       "Failed to start Nodysom AI:",
-      error instanceof Error
+      error instanceof
+        Error
         ? error.message
         : error
     );
 
-    process.exit(1);
+    process.exit(
+      1
+    );
   }
 );
