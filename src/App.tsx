@@ -42,12 +42,10 @@ import {
 // LAZY-LOADED MAIN VIEWS
 // =========================================================
 //
-// These views are loaded only when they are actually needed.
-// This reduces the amount of JavaScript required during the
-// first Nodysom AI startup without removing any feature.
+// Main views are lazy-loaded so the initial application
+// startup does not need to download every view immediately.
 //
-// Some views use named exports, so they are converted to the
-// default export expected by React.lazy().
+// No feature is removed.
 // =========================================================
 
 const HomeView = lazy(
@@ -108,11 +106,6 @@ const ProfileView = lazy(
 // =========================================================
 // MODALS
 // =========================================================
-//
-// Modals remain eagerly available because they can be opened
-// from several parts of the application and are relatively
-// small compared with the main views.
-// =========================================================
 
 import {
   VoiceAssistantModal,
@@ -130,6 +123,9 @@ import {
   OnboardingModal,
 } from './components/OnboardingModal';
 
+// =========================================================
+// APP CONSTANTS
+// =========================================================
 
 const AI_TIMEOUT_MS = 120000;
 
@@ -146,16 +142,28 @@ const CLOUD_SYNC_DELAY = 1200;
 const ONBOARDING_KEY =
   'lifeos_onboarding_completed';
 
-
 // =========================================================
 // HABIT DATE HELPERS
 // =========================================================
 //
-// Habit streaks are now calculated from actual calendar
-// completion dates instead of blindly increasing/decreasing
-// a numeric streak value.
+// Habit completion is based on actual calendar dates.
 //
-// All dates are handled using the user's local calendar date.
+// Example:
+//
+// history = [
+//   "2026-10-04",
+//   "2026-10-05",
+//   "2026-10-06"
+// ]
+//
+// Current streak = 3.
+//
+// If today is 2026-10-07 and the user has not completed
+// the habit yet, the current streak can still display 3
+// because yesterday was completed.
+//
+// If 2026-10-03 was the last completion before that,
+// the streak is broken.
 // =========================================================
 
 function getLocalISODate(
@@ -184,9 +192,20 @@ function getLocalISODate(
 }
 
 
+// =========================================================
+// STRICT ISO DATE PARSER
+// =========================================================
+
 function parseISODate(
   dateString: string
 ): Date | null {
+  if (
+    typeof dateString !==
+    'string'
+  ) {
+    return null;
+  }
+
   if (
     !/^\d{4}-\d{2}-\d{2}$/.test(
       dateString
@@ -234,6 +253,10 @@ function parseISODate(
 }
 
 
+// =========================================================
+// ADD / SUBTRACT DAYS
+// =========================================================
+
 function addDaysToISODate(
   dateString: string,
   amount: number
@@ -258,6 +281,17 @@ function addDaysToISODate(
 }
 
 
+// =========================================================
+// NORMALIZE HABIT HISTORY
+// =========================================================
+//
+// Only valid YYYY-MM-DD dates are retained.
+//
+// Duplicate dates are removed.
+//
+// Dates are sorted chronologically.
+// =========================================================
+
 function normalizeHabitHistory(
   history: unknown
 ): string[] {
@@ -268,22 +302,18 @@ function normalizeHabitHistory(
   }
 
   const validDates =
-    history
-      .filter(
-        (
-          value
-        ): value is string =>
-          typeof value ===
-            'string' &&
-          /^\d{4}-\d{2}-\d{2}$/.test(
+    history.filter(
+      (
+        value
+      ): value is string =>
+        typeof value ===
+          'string' &&
+        Boolean(
+          parseISODate(
             value
-          ) &&
-          Boolean(
-            parseISODate(
-              value
-            )
           )
-      );
+        )
+    );
 
   return Array.from(
     new Set(
@@ -292,6 +322,25 @@ function normalizeHabitHistory(
   ).sort();
 }
 
+
+// =========================================================
+// CALCULATE CURRENT HABIT STREAK
+// =========================================================
+//
+// Source of truth = history.
+//
+// If today is completed:
+//
+//   today -> yesterday -> previous day...
+//
+// If today is not completed:
+//
+//   yesterday -> previous day...
+//
+// This prevents a completed habit from being treated as
+// automatically broken simply because the user has not
+// checked it yet today.
+// =========================================================
 
 function calculateHabitStreak(
   history: string[],
@@ -314,15 +363,6 @@ function calculateHabitStreak(
       normalizedHistory
     );
 
-  /*
-   * The current streak must be connected to today.
-   *
-   * If the habit has not been completed today,
-   * the current streak may still be connected to
-   * yesterday. This gives the user a useful current
-   * streak during the current day while still ensuring
-   * that missing more than one day breaks the streak.
-   */
   let streakStart =
     today;
 
@@ -376,6 +416,114 @@ function calculateHabitStreak(
 }
 
 
+// =========================================================
+// CALCULATE BEST HABIT STREAK
+// =========================================================
+//
+// This is useful for preserving a historical "best streak"
+// independently from the current streak.
+// =========================================================
+
+function calculateBestHabitStreak(
+  history: string[]
+): number {
+  const normalizedHistory =
+    normalizeHabitHistory(
+      history
+    );
+
+  if (
+    normalizedHistory.length ===
+    0
+  ) {
+    return 0;
+  }
+
+  const historySet =
+    new Set(
+      normalizedHistory
+    );
+
+  let bestStreak = 0;
+
+  for (
+    const date of normalizedHistory
+  ) {
+    const previousDate =
+      addDaysToISODate(
+        date,
+        -1
+      );
+
+    if (
+      historySet.has(
+        previousDate
+      )
+    ) {
+      continue;
+    }
+
+    let currentStreak = 1;
+
+    let cursor =
+      addDaysToISODate(
+        date,
+        1
+      );
+
+    while (
+      historySet.has(
+        cursor
+      )
+    ) {
+      currentStreak += 1;
+
+      cursor =
+        addDaysToISODate(
+          cursor,
+          1
+        );
+
+      if (
+        currentStreak >
+        normalizedHistory.length
+      ) {
+        break;
+      }
+    }
+
+    bestStreak =
+      Math.max(
+        bestStreak,
+        currentStreak
+      );
+  }
+
+  return bestStreak;
+}
+
+
+// =========================================================
+// NORMALIZE SINGLE HABIT
+// =========================================================
+//
+// IMPORTANT:
+//
+// Older versions of Nodysom may have had:
+//
+// completedToday: true
+//
+// without storing the actual completion date.
+//
+// Safe migration:
+//
+// - If history already exists, trust history.
+// - If history is empty AND completedToday was true,
+//   migrate that legacy completion to today.
+// - If history is empty AND completedToday is false,
+//   do not invent a completion date.
+// =========================================================
+
 function normalizeHabit(
   habit: HabitItem,
   today: string = getLocalISODate()
@@ -385,25 +533,13 @@ function normalizeHabit(
       habit.history
     );
 
-  /*
-   * Backward compatibility:
-   *
-   * Older Nodysom versions may have stored completedToday
-   * without storing today's date in history.
-   *
-   * If that old flag is true and today's date is missing,
-   * migrate it into the new date-based history model.
-   */
   if (
-    habit.completedToday &&
-    !history.includes(
-      today
-    )
+    history.length === 0 &&
+    habit.completedToday === true
   ) {
     history = [
-      ...history,
       today,
-    ].sort();
+    ];
   }
 
   const completedToday =
@@ -425,22 +561,24 @@ function normalizeHabit(
     completedToday,
 
     streak,
-
-    lastCompletedAt:
-      completedToday
-        ? (
-            habit.lastCompletedAt ||
-            new Date().toISOString()
-          )
-        : habit.lastCompletedAt,
   };
 }
 
+
+// =========================================================
+// NORMALIZE ALL HABITS
+// =========================================================
 
 function normalizeHabits(
   habits: HabitItem[],
   today: string = getLocalISODate()
 ): HabitItem[] {
+  if (
+    !Array.isArray(habits)
+  ) {
+    return [];
+  }
+
   return habits.map(
     (habit) =>
       normalizeHabit(
@@ -455,56 +593,73 @@ function normalizeHabits(
 // SAFE MERGE HELPERS
 // =========================================================
 
-/**
- * Generic merge for records that have an id.
- *
- * Cloud values are loaded first.
- * Local values are then applied so local changes are
- * preserved when the same record exists in both places.
- */
 function mergeById<T extends { id: string }>(
   cloudItems: T[],
   localItems: T[],
 ): T[] {
-  const map = new Map<string, T>();
+  const map =
+    new Map<string, T>();
 
-  for (const item of cloudItems) {
-    if (item?.id) {
-      map.set(item.id, item);
+  for (
+    const item of cloudItems
+  ) {
+    if (
+      item?.id
+    ) {
+      map.set(
+        item.id,
+        item
+      );
     }
   }
 
-  for (const item of localItems) {
-    if (item?.id) {
-      map.set(item.id, item);
+  for (
+    const item of localItems
+  ) {
+    if (
+      item?.id
+    ) {
+      map.set(
+        item.id,
+        item
+      );
     }
   }
 
-  return Array.from(map.values());
+  return Array.from(
+    map.values()
+  );
 }
 
 
-/**
- * Convert chat timestamp into a sortable value.
- *
- * Supports ISO timestamps and display timestamps such as
- * "18:03" or "06:03 PM".
- */
+// =========================================================
+// CHAT SORT VALUE
+// =========================================================
+
 function chatOrderValue(
   message: ChatMessage,
   fallback: number,
 ): number {
   const raw =
-    String(message?.timestamp || '').trim();
+    String(
+      message?.timestamp ||
+        ''
+    ).trim();
 
   if (!raw) {
     return fallback;
   }
 
   const parsed =
-    Date.parse(raw);
+    Date.parse(
+      raw
+    );
 
-  if (!Number.isNaN(parsed)) {
+  if (
+    !Number.isNaN(
+      parsed
+    )
+  ) {
     return parsed;
   }
 
@@ -515,13 +670,19 @@ function chatOrderValue(
 
   if (match) {
     let hours =
-      Number(match[1]);
+      Number(
+        match[1]
+      );
 
     const minutes =
-      Number(match[2]);
+      Number(
+        match[2]
+      );
 
     const seconds =
-      Number(match[3] || 0);
+      Number(
+        match[3] || 0
+      );
 
     const meridiem =
       match[4]?.toUpperCase();
@@ -541,9 +702,15 @@ function chatOrderValue(
     }
 
     return (
-      hours * 60 * 60 * 1000 +
-      minutes * 60 * 1000 +
-      seconds * 1000
+      hours *
+        60 *
+        60 *
+        1000 +
+      minutes *
+        60 *
+        1000 +
+      seconds *
+        1000
     );
   }
 
@@ -551,11 +718,10 @@ function chatOrderValue(
 }
 
 
-/**
- * Merge chat history for normal application hydration.
- *
- * The application keeps the normal 200-message local limit.
- */
+// =========================================================
+// MERGE CHAT HISTORY
+// =========================================================
+
 function mergeChatHistory(
   cloudChat: ChatMessage[],
   localChat: ChatMessage[],
@@ -563,8 +729,12 @@ function mergeChatHistory(
   const map =
     new Map<string, ChatMessage>();
 
-  for (const message of cloudChat) {
-    if (message?.id) {
+  for (
+    const message of cloudChat
+  ) {
+    if (
+      message?.id
+    ) {
       map.set(
         message.id,
         message
@@ -572,8 +742,12 @@ function mergeChatHistory(
     }
   }
 
-  for (const message of localChat) {
-    if (message?.id) {
+  for (
+    const message of localChat
+  ) {
+    if (
+      message?.id
+    ) {
       map.set(
         message.id,
         message
@@ -582,26 +756,35 @@ function mergeChatHistory(
   }
 
   const merged =
-    Array.from(map.values());
+    Array.from(
+      map.values()
+    );
 
   return merged
     .sort(
       (a, b) =>
-        chatOrderValue(a, 0) -
-        chatOrderValue(b, 0)
+        chatOrderValue(
+          a,
+          0
+        ) -
+        chatOrderValue(
+          b,
+          0
+        )
     )
-    .slice(-200);
+    .slice(
+      -200
+    );
 }
 
 
-/**
- * Merge chat history specifically for export.
- *
- * IMPORTANT:
- * Export must NOT use the application's 200-message limit.
- * This allows cloud history and local history to be exported
- * together.
- */
+// =========================================================
+// MERGE CHAT HISTORY FOR EXPORT
+// =========================================================
+//
+// No 200-message limit here.
+// =========================================================
+
 function mergeChatHistoryForExport(
   cloudChat: ChatMessage[],
   localChat: ChatMessage[],
@@ -609,8 +792,12 @@ function mergeChatHistoryForExport(
   const map =
     new Map<string, ChatMessage>();
 
-  for (const message of cloudChat) {
-    if (message?.id) {
+  for (
+    const message of cloudChat
+  ) {
+    if (
+      message?.id
+    ) {
       map.set(
         message.id,
         message
@@ -618,8 +805,12 @@ function mergeChatHistoryForExport(
     }
   }
 
-  for (const message of localChat) {
-    if (message?.id) {
+  for (
+    const message of localChat
+  ) {
+    if (
+      message?.id
+    ) {
       map.set(
         message.id,
         message
@@ -627,11 +818,19 @@ function mergeChatHistoryForExport(
     }
   }
 
-  return Array.from(map.values())
+  return Array.from(
+    map.values()
+  )
     .sort(
       (a, b) =>
-        chatOrderValue(a, 0) -
-        chatOrderValue(b, 0)
+        chatOrderValue(
+          a,
+          0
+        ) -
+        chatOrderValue(
+          b,
+          0
+        )
     );
 }
 
@@ -657,73 +856,98 @@ function ViewLoading() {
 }
 
 
+// =========================================================
+// APP
+// =========================================================
+
 export default function App() {
+
   // =========================================================
   // APP STATE
   // =========================================================
 
   const [currentTab, setCurrentTab] =
-    useState<TabType>('home');
+    useState<TabType>(
+      'home'
+    );
 
   const [user, setUser] =
-    useState<UserProfile>(() =>
-      Storage.getUser()
+    useState<UserProfile>(
+      () =>
+        Storage.getUser()
     );
 
   const [memories, setMemories] =
-    useState<MemoryItem[]>(() =>
-      Storage.getMemories()
+    useState<MemoryItem[]>(
+      () =>
+        Storage.getMemories()
     );
 
   const [plannerItems, setPlannerItems] =
-    useState<PlannerItem[]>(() =>
-      Storage.getPlannerItems()
+    useState<PlannerItem[]>(
+      () =>
+        Storage.getPlannerItems()
     );
 
   const [habits, setHabits] =
-    useState<HabitItem[]>(() =>
-      normalizeHabits(
-        Storage.getHabits()
-      )
+    useState<HabitItem[]>(
+      () =>
+        normalizeHabits(
+          Storage.getHabits()
+        )
     );
 
   const [chatHistory, setChatHistory] =
-    useState<ChatMessage[]>(() =>
-      Storage.getChatHistory()
+    useState<ChatMessage[]>(
+      () =>
+        Storage.getChatHistory()
     );
 
   const [isOnline, setIsOnline] =
     useState(
-      typeof navigator !== 'undefined'
+      typeof navigator !==
+        'undefined'
         ? navigator.onLine
         : true
     );
 
   const [isPhoneFrame, setIsPhoneFrame] =
-    useState(false);
+    useState(
+      false
+    );
 
   const [isLoadingAI, setIsLoadingAI] =
-    useState(false);
+    useState(
+      false
+    );
 
   const [isVoiceOpen, setIsVoiceOpen] =
-    useState(false);
+    useState(
+      false
+    );
 
   const [isTranslatorOpen, setIsTranslatorOpen] =
-    useState(false);
+    useState(
+      false
+    );
 
   const [pendingAction, setPendingAction] =
-    useState<SmartAction | null>(null);
+    useState<SmartAction | null>(
+      null
+    );
 
   const [isOnboardingOpen, setIsOnboardingOpen] =
-    useState(() => {
-      try {
-        return !localStorage.getItem(
-          ONBOARDING_KEY
-        );
-      } catch {
-        return true;
+    useState(
+      () => {
+        try {
+          return !localStorage.getItem(
+            ONBOARDING_KEY
+          );
+        } catch {
+          return true;
+        }
       }
-    });
+    );
 
 
   // =========================================================
@@ -731,54 +955,55 @@ export default function App() {
   // =========================================================
 
   const [cloudUserId, setCloudUserId] =
-    useState<string | null>(null);
+    useState<string | null>(
+      null
+    );
 
   const [cloudEmail, setCloudEmail] =
-    useState('');
+    useState(
+      ''
+    );
 
   const [cloudBusy, setCloudBusy] =
-    useState(false);
+    useState(
+      false
+    );
 
-  /**
-   * cloudReady becomes true only after cloud hydration
-   * has completed successfully.
-   */
   const [cloudReady, setCloudReady] =
-    useState(false);
+    useState(
+      false
+    );
 
 
-  /**
-   * Protects against stale asynchronous cloud requests.
-   */
+  // =========================================================
+  // CLOUD REFS
+  // =========================================================
+
   const cloudRequestId =
-    useRef(0);
+    useRef(
+      0
+    );
 
-
-  /**
-   * Prevents automatic sync before hydration.
-   */
   const cloudHydrated =
-    useRef(false);
+    useRef(
+      false
+    );
 
-
-  /**
-   * Prevents duplicate cloud saves.
-   */
   const cloudSyncTimer =
-    useRef<number | null>(null);
+    useRef<number | null>(
+      null
+    );
 
-
-  /**
-   * Prevents state updates after unmount.
-   */
   const mountedRef =
-    useRef(true);
+    useRef(
+      true
+    );
 
 
-  /**
-   * Keeps the latest local state available to the stable
-   * cloud-login callback.
-   */
+  // =========================================================
+  // LATEST DATA REF
+  // =========================================================
+
   const latestDataRef =
     useRef({
       user,
@@ -787,7 +1012,6 @@ export default function App() {
       habits,
       chatHistory,
     });
-
 
   latestDataRef.current = {
     user,
@@ -803,13 +1027,16 @@ export default function App() {
   // =========================================================
 
   useEffect(() => {
-    mountedRef.current = true;
+    mountedRef.current =
+      true;
 
     return () => {
-      mountedRef.current = false;
+      mountedRef.current =
+        false;
 
       if (
-        cloudSyncTimer.current !== null
+        cloudSyncTimer.current !==
+        null
       ) {
         window.clearTimeout(
           cloudSyncTimer.current
@@ -820,13 +1047,7 @@ export default function App() {
 
 
   // =========================================================
-  // NORMALIZE EXISTING HABITS
-  // =========================================================
-  //
-  // This runs once when the application starts.
-  //
-  // It migrates old habit records into the date-based
-  // history system and recalculates their current streak.
+  // NORMALIZE EXISTING HABITS ON STARTUP
   // =========================================================
 
   useEffect(() => {
@@ -834,7 +1055,8 @@ export default function App() {
       getLocalISODate();
 
     const currentHabits =
-      latestDataRef.current.habits;
+      latestDataRef.current
+        .habits;
 
     const normalized =
       normalizeHabits(
@@ -850,7 +1072,9 @@ export default function App() {
         currentHabits
       );
 
-    if (changed) {
+    if (
+      changed
+    ) {
       setHabits(
         normalized
       );
@@ -867,13 +1091,20 @@ export default function App() {
   // =========================================================
 
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-    };
 
-    const handleOffline = () => {
-      setIsOnline(false);
-    };
+    const handleOnline =
+      () => {
+        setIsOnline(
+          true
+        );
+      };
+
+    const handleOffline =
+      () => {
+        setIsOnline(
+          false
+        );
+      };
 
     window.addEventListener(
       'online',
@@ -896,11 +1127,12 @@ export default function App() {
         handleOffline
       );
     };
+
   }, []);
 
 
   // =========================================================
-  // CLOUD LOGIN / SAFE HYDRATION
+  // CLOUD LOGIN / HYDRATION
   // =========================================================
 
   const handleCloudLogin =
@@ -909,7 +1141,10 @@ export default function App() {
         userId: string,
         email: string
       ) => {
-        if (!userId) {
+
+        if (
+          !userId
+        ) {
           return;
         }
 
@@ -919,15 +1154,24 @@ export default function App() {
         cloudHydrated.current =
           false;
 
-        setCloudReady(false);
+        setCloudReady(
+          false
+        );
 
-        setCloudUserId(userId);
+        setCloudUserId(
+          userId
+        );
 
-        setCloudEmail(email);
+        setCloudEmail(
+          email
+        );
 
-        setCloudBusy(true);
+        setCloudBusy(
+          true
+        );
 
         try {
+
           const cloudData =
             await loadCloudData(
               userId
@@ -940,7 +1184,9 @@ export default function App() {
             return;
           }
 
-          if (!mountedRef.current) {
+          if (
+            !mountedRef.current
+          ) {
             return;
           }
 
@@ -949,7 +1195,10 @@ export default function App() {
           // EXISTING CLOUD ACCOUNT
           // =================================================
 
-          if (cloudData) {
+          if (
+            cloudData
+          ) {
+
             const localData =
               latestDataRef.current;
 
@@ -985,9 +1234,9 @@ export default function App() {
                 : [];
 
 
-            // -------------------------------------------------
+            // =============================================
             // USER
-            // -------------------------------------------------
+            // =============================================
 
             const restoredUser:
               UserProfile = {
@@ -996,9 +1245,9 @@ export default function App() {
             };
 
 
-            // -------------------------------------------------
+            // =============================================
             // MEMORIES
-            // -------------------------------------------------
+            // =============================================
 
             const restoredMemories =
               mergeById(
@@ -1007,9 +1256,9 @@ export default function App() {
               );
 
 
-            // -------------------------------------------------
+            // =============================================
             // PLANNER
-            // -------------------------------------------------
+            // =============================================
 
             const restoredPlanner =
               mergeById(
@@ -1018,9 +1267,9 @@ export default function App() {
               );
 
 
-            // -------------------------------------------------
+            // =============================================
             // HABITS
-            // -------------------------------------------------
+            // =============================================
 
             const mergedHabits =
               mergeById(
@@ -1034,9 +1283,9 @@ export default function App() {
               );
 
 
-            // -------------------------------------------------
+            // =============================================
             // CHAT
-            // -------------------------------------------------
+            // =============================================
 
             const restoredChat =
               mergeChatHistory(
@@ -1045,9 +1294,9 @@ export default function App() {
               );
 
 
-            // =================================================
+            // =============================================
             // APPLY MERGED DATA
-            // =================================================
+            // =============================================
 
             setUser(
               restoredUser
@@ -1070,9 +1319,9 @@ export default function App() {
             );
 
 
-            // =================================================
-            // UPDATE LOCAL CACHE
-            // =================================================
+            // =============================================
+            // LOCAL CACHE
+            // =============================================
 
             Storage.saveUser(
               restoredUser
@@ -1095,14 +1344,9 @@ export default function App() {
             );
 
 
-            // =================================================
-            // WRITE MERGED DATA BACK TO CLOUD
-            // =================================================
-            //
-            // The merged state has already been restored locally.
-            // Cloud write is kept asynchronous so the UI does not
-            // remain blocked unnecessarily after hydration.
-            // =================================================
+            // =============================================
+            // MERGED CLOUD SAVE
+            // =============================================
 
             void saveCloudData(
               userId,
@@ -1139,7 +1383,9 @@ export default function App() {
               return;
             }
 
-            if (!mountedRef.current) {
+            if (
+              !mountedRef.current
+            ) {
               return;
             }
 
@@ -1184,14 +1430,6 @@ export default function App() {
           };
 
 
-          // =================================================
-          // IMPORTANT:
-          //
-          // Do not block the application UI longer than needed.
-          // The local state is already available, so the initial
-          // cloud backup is started asynchronously.
-          // =================================================
-
           void saveCloudData(
             userId,
             initialCloudData
@@ -1212,7 +1450,9 @@ export default function App() {
             return;
           }
 
-          if (!mountedRef.current) {
+          if (
+            !mountedRef.current
+          ) {
             return;
           }
 
@@ -1222,7 +1462,11 @@ export default function App() {
           setCloudReady(
             true
           );
-        } catch (error) {
+
+        } catch (
+          error
+        ) {
+
           console.error(
             'Cloud data load error:',
             error
@@ -1239,7 +1483,9 @@ export default function App() {
               false
             );
           }
+
         } finally {
+
           if (
             requestId ===
               cloudRequestId.current &&
@@ -1249,6 +1495,7 @@ export default function App() {
               false
             );
           }
+
         }
       },
       []
@@ -1260,13 +1507,17 @@ export default function App() {
   // =========================================================
 
   useEffect(() => {
-    let active = true;
+
+    let active =
+      true;
 
     const loadSession =
       async () => {
+
         if (
           !isSupabaseConfigured
         ) {
+
           setCloudReady(
             false
           );
@@ -1278,20 +1529,28 @@ export default function App() {
         }
 
         try {
+
           const session =
             await getCurrentSession();
 
-          if (!active) {
+          if (
+            !active
+          ) {
             return;
           }
 
-          if (session?.user) {
+          if (
+            session?.user
+          ) {
+
             await handleCloudLogin(
               session.user.id,
               session.user.email ||
                 ''
             );
+
           } else {
+
             cloudRequestId.current++;
 
             cloudHydrated.current =
@@ -1309,13 +1568,20 @@ export default function App() {
               false
             );
           }
-        } catch (error) {
+
+        } catch (
+          error
+        ) {
+
           console.error(
             'Supabase session error:',
             error
           );
 
-          if (active) {
+          if (
+            active
+          ) {
+
             cloudHydrated.current =
               false;
 
@@ -1335,7 +1601,10 @@ export default function App() {
       | undefined;
 
 
-    if (supabase) {
+    if (
+      supabase
+    ) {
+
       const {
         data: {
           subscription,
@@ -1346,17 +1615,25 @@ export default function App() {
             _event,
             session
           ) => {
-            if (!active) {
+
+            if (
+              !active
+            ) {
               return;
             }
 
-            if (session?.user) {
+            if (
+              session?.user
+            ) {
+
               await handleCloudLogin(
                 session.user.id,
                 session.user.email ||
                   ''
               );
+
             } else {
+
               cloudRequestId.current++;
 
               cloudHydrated.current =
@@ -1378,17 +1655,20 @@ export default function App() {
         );
 
 
-      unsubscribe = () => {
-        subscription.unsubscribe();
-      };
+      unsubscribe =
+        () => {
+          subscription.unsubscribe();
+        };
     }
 
 
     return () => {
-      active = false;
+      active =
+        false;
 
       unsubscribe?.();
     };
+
   }, [
     handleCloudLogin,
   ]);
@@ -1399,6 +1679,7 @@ export default function App() {
   // =========================================================
 
   useEffect(() => {
+
     if (
       !cloudUserId ||
       !cloudReady ||
@@ -1410,8 +1691,10 @@ export default function App() {
 
 
     if (
-      cloudSyncTimer.current !== null
+      cloudSyncTimer.current !==
+      null
     ) {
+
       window.clearTimeout(
         cloudSyncTimer.current
       );
@@ -1421,6 +1704,7 @@ export default function App() {
     cloudSyncTimer.current =
       window.setTimeout(
         async () => {
+
           if (
             !cloudUserId ||
             !cloudReady ||
@@ -1430,6 +1714,7 @@ export default function App() {
           }
 
           try {
+
             await saveCloudData(
               cloudUserId,
               {
@@ -1440,27 +1725,36 @@ export default function App() {
                 chatHistory,
               }
             );
-          } catch (error) {
+
+          } catch (
+            error
+          ) {
+
             console.error(
               'Cloud sync error:',
               error
             );
           }
+
         },
         CLOUD_SYNC_DELAY
       );
 
 
     return () => {
+
       if (
         cloudSyncTimer.current !==
         null
       ) {
+
         window.clearTimeout(
           cloudSyncTimer.current
         );
       }
+
     };
+
   }, [
     cloudUserId,
     cloudReady,
@@ -1473,7 +1767,7 @@ export default function App() {
 
 
   // =========================================================
-  // AUTH ACTIONS
+  // CLOUD SIGN IN
   // =========================================================
 
   const handleCloudSignIn =
@@ -1481,9 +1775,13 @@ export default function App() {
       email: string,
       password: string
     ) => {
-      setCloudBusy(true);
+
+      setCloudBusy(
+        true
+      );
 
       try {
+
         const {
           data,
           error,
@@ -1493,11 +1791,15 @@ export default function App() {
             password
           );
 
-        if (error) {
+        if (
+          error
+        ) {
           throw error;
         }
 
-        if (!data.user) {
+        if (
+          !data.user
+        ) {
           throw new Error(
             'Login failed.'
           );
@@ -1510,23 +1812,33 @@ export default function App() {
         );
 
         return {
-          success: true,
+          success:
+            true,
+
           message:
             'Login successful. Your cloud data has been restored.',
         };
-      } catch (error: any) {
+
+      } catch (
+        error: any
+      ) {
+
         console.error(
           'Sign in error:',
           error
         );
 
         return {
-          success: false,
+          success:
+            false,
+
           message:
             error?.message ||
             'Login failed. Please check your email and password.',
         };
+
       } finally {
+
         setCloudBusy(
           false
         );
@@ -1534,14 +1846,22 @@ export default function App() {
     };
 
 
+  // =========================================================
+  // CLOUD SIGN UP
+  // =========================================================
+
   const handleCloudSignUp =
     async (
       email: string,
       password: string
     ) => {
-      setCloudBusy(true);
+
+      setCloudBusy(
+        true
+      );
 
       try {
+
         const {
           data,
           error,
@@ -1551,13 +1871,16 @@ export default function App() {
             password
           );
 
-        if (error) {
+        if (
+          error
+        ) {
           throw error;
         }
 
         if (
           data.session?.user
         ) {
+
           await handleCloudLogin(
             data.session.user.id,
             data.session.user.email ||
@@ -1565,30 +1888,42 @@ export default function App() {
           );
 
           return {
-            success: true,
+            success:
+              true,
+
             message:
               'Account created successfully. Your data is now backed up.',
           };
         }
 
         return {
-          success: true,
+          success:
+            true,
+
           message:
             'Account created. Please check your email to confirm your account.',
         };
-      } catch (error: any) {
+
+      } catch (
+        error: any
+      ) {
+
         console.error(
           'Sign up error:',
           error
         );
 
         return {
-          success: false,
+          success:
+            false,
+
           message:
             error?.message ||
             'Could not create your account.',
         };
+
       } finally {
+
         setCloudBusy(
           false
         );
@@ -1596,11 +1931,19 @@ export default function App() {
     };
 
 
+  // =========================================================
+  // CLOUD SIGN OUT
+  // =========================================================
+
   const handleCloudSignOut =
     async () => {
-      setCloudBusy(true);
+
+      setCloudBusy(
+        true
+      );
 
       try {
+
         cloudRequestId.current++;
 
         cloudHydrated.current =
@@ -1610,6 +1953,7 @@ export default function App() {
           cloudSyncTimer.current !==
           null
         ) {
+
           window.clearTimeout(
             cloudSyncTimer.current
           );
@@ -1629,15 +1973,19 @@ export default function App() {
           false
         );
 
-        /**
-         * Local data remains intact after logout.
-         */
-      } catch (error) {
+        // Local data intentionally remains intact.
+
+      } catch (
+        error
+      ) {
+
         console.error(
           'Sign out error:',
           error
         );
+
       } finally {
+
         setCloudBusy(
           false
         );
@@ -1653,6 +2001,7 @@ export default function App() {
     (
       updated: Partial<UserProfile>
     ) => {
+
       const nextUser = {
         ...user,
         ...updated,
@@ -1676,6 +2025,7 @@ export default function App() {
     (
       id: string
     ) => {
+
       const updated =
         plannerItems.map(
           (item) =>
@@ -1698,6 +2048,10 @@ export default function App() {
     };
 
 
+  // =========================================================
+  // ADD PLANNER TASK
+  // =========================================================
+
   const handleAddTask =
     (
       item: Omit<
@@ -1705,15 +2059,19 @@ export default function App() {
         'id'
       >
     ) => {
+
       const category =
         item.category?.trim();
 
       let tags =
         (item.tags || [])
-          .map((tag) =>
-            tag.trim()
+          .map(
+            (tag) =>
+              tag.trim()
           )
-          .filter(Boolean);
+          .filter(
+            Boolean
+          );
 
       if (
         category &&
@@ -1721,25 +2079,32 @@ export default function App() {
           category
         )
       ) {
+
         tags = [
           category,
           ...tags,
         ];
       }
 
-      tags = Array.from(
-        new Set(tags)
-      );
+      tags =
+        Array.from(
+          new Set(
+            tags
+          )
+        );
 
       const newItem:
         PlannerItem = {
         ...item,
+
         id:
           `task_${Date.now()}`,
+
         category:
           category ||
           tags[0] ||
           'General',
+
         tags,
       };
 
@@ -1762,35 +2127,47 @@ export default function App() {
   // HABITS
   // =========================================================
   //
-  // DATE-BASED HABIT TRACKING
+  // IMPORTANT CHANGE:
   //
-  // The previous implementation did this:
+  // We NEVER do:
   //
-  //   completed -> streak + 1
-  //   uncompleted -> streak - 1
+  // streak + 1
   //
-  // That approach can become incorrect when days are skipped,
-  // the app is reopened later, or cloud/local data is merged.
+  // or:
   //
-  // The new implementation records the exact completion date
-  // and calculates the streak from consecutive dates.
+  // streak - 1
+  //
+  // anymore.
+  //
+  // Instead:
+  //
+  // history = source of truth
+  //
+  // and streak is recalculated from the dates.
   // =========================================================
 
   const handleToggleHabit =
     (
       id: string
     ) => {
+
       const today =
         getLocalISODate();
 
       const updated =
         habits.map(
           (habit) => {
+
             if (
               habit.id !== id
             ) {
               return habit;
             }
+
+
+            // =============================================
+            // NORMALIZE EXISTING HABIT
+            // =============================================
 
             const normalized =
               normalizeHabit(
@@ -1798,40 +2175,51 @@ export default function App() {
                 today
               );
 
+
+            // =============================================
+            // READ HISTORY
+            // =============================================
+
             const history =
               normalizeHabitHistory(
                 normalized.history
               );
+
 
             const completedToday =
               history.includes(
                 today
               );
 
+
+            // =============================================
+            // TOGGLE TODAY
+            // =============================================
+
             let nextHistory:
               string[];
 
-            let nextCompletedToday:
-              boolean;
 
             if (
               completedToday
             ) {
-              /*
-               * Toggle OFF today's completion.
-               */
+
+              // -------------------------------------------
+              // UNCOMPLETE TODAY
+              // -------------------------------------------
+
               nextHistory =
                 history.filter(
                   (date) =>
                     date !== today
                 );
 
-              nextCompletedToday =
-                false;
             } else {
-              /*
-               * Toggle ON today's completion.
-               */
+
+              // -------------------------------------------
+              // COMPLETE TODAY
+              // -------------------------------------------
+
               nextHistory =
                 Array.from(
                   new Set([
@@ -1839,10 +2227,12 @@ export default function App() {
                     today,
                   ])
                 ).sort();
-
-              nextCompletedToday =
-                true;
             }
+
+
+            // =============================================
+            // RECALCULATE STREAK
+            // =============================================
 
             const nextStreak =
               calculateHabitStreak(
@@ -1850,31 +2240,32 @@ export default function App() {
                 today
               );
 
-            const now =
-              new Date().toISOString();
+
+            // =============================================
+            // RETURN UPDATED HABIT
+            // =============================================
 
             return {
               ...normalized,
 
-              completedToday:
-                nextCompletedToday,
-
               history:
                 nextHistory,
 
+              completedToday:
+                nextHistory.includes(
+                  today
+                ),
+
               streak:
                 nextStreak,
-
-              lastCompletedAt:
-                nextCompletedToday
-                  ? now
-                  : normalized.lastCompletedAt,
-
-              updatedAt:
-                now,
             };
           }
         );
+
+
+      // ===============================================
+      // SAVE LOCAL STATE
+      // ===============================================
 
       setHabits(
         updated
@@ -1895,6 +2286,7 @@ export default function App() {
       content: string,
       category: any
     ) => {
+
       const cleanContent =
         content.trim();
 
@@ -1935,10 +2327,15 @@ export default function App() {
     };
 
 
+  // =========================================================
+  // DELETE MEMORY
+  // =========================================================
+
   const handleDeleteMemory =
     (
       id: string
     ) => {
+
       const updated =
         memories.filter(
           (memory) =>
@@ -1959,29 +2356,12 @@ export default function App() {
   // NEW CHAT
   // =========================================================
 
-  /**
-   * Starts a fresh Nodysom AI chat.
-   *
-   * IMPORTANT:
-   *
-   * This only clears the currently visible/local chat
-   * history. It does NOT remove:
-   *
-   * - Login / account
-   * - Supabase account
-   * - Memories
-   * - Planner
-   * - Habits
-   * - User profile
-   * - App settings
-   *
-   * The existing chat history can still be part of the
-   * cloud/export architecture when the application syncs
-   * or exports its current data.
-   */
   const handleNewChat =
     () => {
-      if (isLoadingAI) {
+
+      if (
+        isLoadingAI
+      ) {
         return;
       }
 
@@ -2010,6 +2390,7 @@ export default function App() {
     async (
       text: string
     ) => {
+
       const cleanText =
         text.trim();
 
@@ -2075,14 +2456,18 @@ export default function App() {
           AI_TIMEOUT_MS
         );
 
+
       try {
+
         const recentHistory =
           nextHistory
             .slice(
               -MAX_HISTORY
             )
             .map(
-              (message) => ({
+              (
+                message
+              ) => ({
                 role:
                   message.role,
 
@@ -2097,6 +2482,7 @@ export default function App() {
               })
             );
 
+
         const recentMemories =
           memories
             .slice(
@@ -2104,7 +2490,9 @@ export default function App() {
               MAX_MEMORY_ITEMS
             )
             .map(
-              (memory) => ({
+              (
+                memory
+              ) => ({
                 content:
                   String(
                     memory.content ||
@@ -2115,6 +2503,7 @@ export default function App() {
                   ),
               })
             );
+
 
         const safeProfile = {
           name:
@@ -2134,6 +2523,7 @@ export default function App() {
               500
             ),
         };
+
 
         const response =
           await fetch(
@@ -2170,11 +2560,16 @@ export default function App() {
             }
           );
 
-        if (!response.ok) {
+
+        if (
+          !response.ok
+        ) {
+
           let serverMessage =
             'AI Agent request failed.';
 
           try {
+
             const errorData =
               await response.json();
 
@@ -2182,6 +2577,7 @@ export default function App() {
               errorData?.error ||
               errorData?.reply ||
               serverMessage;
+
           } catch {
             // Ignore invalid JSON.
           }
@@ -2191,8 +2587,10 @@ export default function App() {
           );
         }
 
+
         const data =
           await response.json();
+
 
         const agentReply =
           typeof data.reply ===
@@ -2200,6 +2598,7 @@ export default function App() {
           data.reply.trim()
             ? data.reply.trim()
             : 'I processed your request.';
+
 
         const assistantMsg:
           ChatMessage = {
@@ -2229,10 +2628,12 @@ export default function App() {
             null,
         };
 
+
         const finalHistory = [
           ...nextHistory,
           assistantMsg,
         ];
+
 
         setChatHistory(
           finalHistory
@@ -2242,30 +2643,36 @@ export default function App() {
           finalHistory
         );
 
+
         if (
           data.newMemory &&
           typeof data.newMemory ===
             'string' &&
           data.newMemory.trim()
         ) {
+
           handleAddMemory(
             data.newMemory.trim(),
             'fact'
           );
         }
 
+
         if (
           data.detectedAction
         ) {
+
           setPendingAction(
             data.detectedAction
           );
         }
 
+
         if (
           data.usedTool &&
           data.tool
         ) {
+
           console.log(
             'Agent tool used:',
             data.tool
@@ -2274,40 +2681,51 @@ export default function App() {
           if (
             data.toolResult
           ) {
+
             console.log(
               'Tool result:',
               data.toolResult
             );
           }
         }
+
       } catch (
         error: any
       ) {
+
         console.error(
           'Nodysom AI Agent error:',
           error
         );
 
+
         let errorText =
           'Nodysom AI is temporarily unavailable. Please try again.';
+
 
         if (
           error?.name ===
           'AbortError'
         ) {
+
           errorText =
             'The AI request took too long. Please try again.';
+
         } else if (
           !isOnline
         ) {
+
           errorText =
             'You are offline. Please check your internet connection and try again.';
+
         } else if (
           error?.message
         ) {
+
           errorText =
             error.message;
         }
+
 
         const errorMsg:
           ChatMessage = {
@@ -2333,10 +2751,12 @@ export default function App() {
             ),
         };
 
+
         const errorHistory = [
           ...nextHistory,
           errorMsg,
         ];
+
 
         setChatHistory(
           errorHistory
@@ -2345,7 +2765,9 @@ export default function App() {
         Storage.saveChatHistory(
           errorHistory
         );
+
       } finally {
+
         window.clearTimeout(
           timeoutId
         );
@@ -2365,9 +2787,11 @@ export default function App() {
     (
       finalAction: SmartAction
     ) => {
+
       const category =
         finalAction.category ||
         'General';
+
 
       const newItem:
         PlannerItem = {
@@ -2385,9 +2809,7 @@ export default function App() {
 
         date:
           finalAction.date ||
-          new Date()
-            .toISOString()
-            .split('T')[0],
+          getLocalISODate(),
 
         time:
           finalAction.time ||
@@ -2406,10 +2828,12 @@ export default function App() {
         ],
       };
 
+
       const updated = [
         newItem,
         ...plannerItems,
       ];
+
 
       setPlannerItems(
         updated
@@ -2419,9 +2843,11 @@ export default function App() {
         updated
       );
 
+
       setPendingAction(
         null
       );
+
 
       const confirmMsg:
         ChatMessage = {
@@ -2458,10 +2884,12 @@ export default function App() {
           ),
       };
 
+
       const finalHistory = [
         ...chatHistory,
         confirmMsg,
       ];
+
 
       setChatHistory(
         finalHistory
@@ -2483,26 +2911,33 @@ export default function App() {
         Partial<UserProfile>,
       initialPrompt?: string
     ) => {
+
       handleUpdateUser(
         updatedProfile
       );
 
+
       try {
+
         localStorage.setItem(
           ONBOARDING_KEY,
           'true'
         );
+
       } catch {
         // Ignore storage errors.
       }
+
 
       setIsOnboardingOpen(
         false
       );
 
+
       if (
         initialPrompt
       ) {
+
         handleSendMessage(
           initialPrompt
         );
@@ -2511,12 +2946,14 @@ export default function App() {
 
 
   // =========================================================
-  // CLEAR LOCAL DATA
+  // CLEAR ALL LOCAL DATA
   // =========================================================
 
   const handleClearAllData =
     () => {
+
       Storage.clearAllData();
+
 
       const resetUser =
         Storage.getUser();
@@ -2532,6 +2969,7 @@ export default function App() {
 
       const resetChat =
         Storage.getChatHistory();
+
 
       setUser(
         resetUser
@@ -2564,30 +3002,21 @@ export default function App() {
   const handleExportAllData =
     useCallback(
       async () => {
-        /**
-         * IMPORTANT:
-         *
-         * This function is now the ONLY exporter used by
-         * the ProfileView Export My Data button.
-         *
-         * We intentionally DO NOT call
-         * Storage.exportAllDataJSON() here.
-         *
-         * That old function was causing the application to
-         * return the older local-only export format.
-         */
 
         try {
-          // =================================================
-          // ALWAYS START WITH CURRENT LOCAL DATA
-          // =================================================
+
+          // ===============================================
+          // CURRENT LOCAL DATA
+          // ===============================================
 
           const localData =
             latestDataRef.current;
 
+
           let exportUser:
             UserProfile =
             localData.user;
+
 
           let exportMemories:
             MemoryItem[] =
@@ -2597,6 +3026,7 @@ export default function App() {
               ? localData.memories
               : [];
 
+
           let exportPlanner:
             PlannerItem[] =
             Array.isArray(
@@ -2604,6 +3034,7 @@ export default function App() {
             )
               ? localData.plannerItems
               : [];
+
 
           let exportHabits:
             HabitItem[] =
@@ -2615,6 +3046,7 @@ export default function App() {
                 )
               : [];
 
+
           let exportChat:
             ChatMessage[] =
             Array.isArray(
@@ -2623,33 +3055,41 @@ export default function App() {
               ? localData.chatHistory
               : [];
 
+
           let source:
             | 'local'
             | 'local + cloud' =
             'local';
 
 
-          // =================================================
-          // TRY TO INCLUDE SUPABASE DATA
-          // =================================================
+          // ===============================================
+          // INCLUDE SUPABASE DATA
+          // ===============================================
 
           if (
             cloudUserId &&
             isSupabaseConfigured
           ) {
+
             try {
+
               const cloudData =
                 await loadCloudData(
                   cloudUserId
                 );
 
-              if (cloudData) {
+
+              if (
+                cloudData
+              ) {
+
                 const cloudMemories =
                   Array.isArray(
                     cloudData.memories
                   )
                     ? cloudData.memories
                     : [];
+
 
                 const cloudPlanner =
                   Array.isArray(
@@ -2658,12 +3098,14 @@ export default function App() {
                     ? cloudData.plannerItems
                     : [];
 
+
                 const cloudHabits =
                   Array.isArray(
                     cloudData.habits
                   )
                     ? cloudData.habits
                     : [];
+
 
                 const cloudChat =
                   Array.isArray(
@@ -2673,9 +3115,9 @@ export default function App() {
                     : [];
 
 
-                // -------------------------------------------
+                // =========================================
                 // USER
-                // -------------------------------------------
+                // =========================================
 
                 exportUser = {
                   ...(cloudData.user || {}),
@@ -2694,9 +3136,9 @@ export default function App() {
                 };
 
 
-                // -------------------------------------------
+                // =========================================
                 // MEMORIES
-                // -------------------------------------------
+                // =========================================
 
                 exportMemories =
                   mergeById(
@@ -2705,9 +3147,9 @@ export default function App() {
                   );
 
 
-                // -------------------------------------------
+                // =========================================
                 // PLANNER
-                // -------------------------------------------
+                // =========================================
 
                 exportPlanner =
                   mergeById(
@@ -2716,9 +3158,9 @@ export default function App() {
                   );
 
 
-                // -------------------------------------------
+                // =========================================
                 // HABITS
-                // -------------------------------------------
+                // =========================================
 
                 exportHabits =
                   normalizeHabits(
@@ -2729,19 +3171,10 @@ export default function App() {
                   );
 
 
-                // -------------------------------------------
+                // =========================================
                 // CHAT
-                // -------------------------------------------
+                // =========================================
 
-                /**
-                 * IMPORTANT:
-                 *
-                 * Do NOT use mergeChatHistory() here because
-                 * that function intentionally applies the
-                 * application's 200-message limit.
-                 *
-                 * Export uses the complete merge instead.
-                 */
                 exportChat =
                   mergeChatHistoryForExport(
                     cloudChat,
@@ -2752,13 +3185,11 @@ export default function App() {
                 source =
                   'local + cloud';
               }
+
             } catch (
               cloudError
             ) {
-              /**
-               * Cloud failure must never prevent local
-               * export.
-               */
+
               console.warn(
                 'Cloud export unavailable. Continuing with local data.',
                 cloudError
@@ -2770,21 +3201,25 @@ export default function App() {
           }
 
 
-          // =================================================
+          // ===============================================
           // APP SETTINGS
-          // =================================================
+          // ===============================================
 
           let settings:
             ReturnType<
               typeof Storage.getAppSettings
             >;
 
+
           try {
+
             settings =
               Storage.getAppSettings();
+
           } catch (
             settingsError
           ) {
+
             console.warn(
               'Could not load app settings for export.',
               settingsError
@@ -2797,9 +3232,9 @@ export default function App() {
           }
 
 
-          // =================================================
-          // FINAL BACKUP OBJECT
-          // =================================================
+          // ===============================================
+          // BACKUP OBJECT
+          // ===============================================
 
           const backup = {
             app:
@@ -2835,9 +3270,9 @@ export default function App() {
           };
 
 
-          // =================================================
-          // CREATE JSON
-          // =================================================
+          // ===============================================
+          // JSON
+          // ===============================================
 
           const json =
             JSON.stringify(
@@ -2847,9 +3282,9 @@ export default function App() {
             );
 
 
-          // =================================================
-          // CREATE DOWNLOAD
-          // =================================================
+          // ===============================================
+          // DOWNLOAD
+          // ===============================================
 
           const blob =
             new Blob(
@@ -2860,18 +3295,22 @@ export default function App() {
               }
             );
 
+
           const url =
             URL.createObjectURL(
               blob
             );
+
 
           const anchor =
             document.createElement(
               'a'
             );
 
+
           anchor.href =
             url;
+
 
           anchor.download =
             `Nodysom_AI_Backup_${
@@ -2880,27 +3319,28 @@ export default function App() {
                 .split('T')[0]
             }.json`;
 
+
           anchor.style.display =
             'none';
+
 
           document.body.appendChild(
             anchor
           );
 
+
           anchor.click();
+
 
           document.body.removeChild(
             anchor
           );
 
+
           URL.revokeObjectURL(
             url
           );
 
-
-          // =================================================
-          // DEBUG INFORMATION
-          // =================================================
 
           console.log(
             'Nodysom AI data export completed successfully.',
@@ -2925,33 +3365,26 @@ export default function App() {
                 exportChat.length,
             }
           );
+
         } catch (
           error
         ) {
-          /**
-           * IMPORTANT:
-           *
-           * We intentionally DO NOT call
-           * Storage.exportAllDataJSON() anymore.
-           *
-           * Calling the old exporter here was the reason
-           * an old JSON structure could appear again.
-           */
 
           console.error(
             'Nodysom AI export failed:',
             error
           );
 
-          /**
-           * Create a final emergency backup directly from
-           * the current in-memory local state.
-           *
-           * This still uses the NEW Nodysom AI export format.
-           */
+
+          // =============================================
+          // EMERGENCY LOCAL BACKUP
+          // =============================================
+
           try {
+
             const emergencyData =
               latestDataRef.current;
+
 
             const emergencyBackup = {
               app:
@@ -2990,12 +3423,14 @@ export default function App() {
                 {},
             };
 
+
             const emergencyJson =
               JSON.stringify(
                 emergencyBackup,
                 null,
                 2
               );
+
 
             const emergencyBlob =
               new Blob(
@@ -3006,18 +3441,22 @@ export default function App() {
                 }
               );
 
+
             const emergencyUrl =
               URL.createObjectURL(
                 emergencyBlob
               );
+
 
             const emergencyAnchor =
               document.createElement(
                 'a'
               );
 
+
             emergencyAnchor.href =
               emergencyUrl;
+
 
             emergencyAnchor.download =
               `Nodysom_AI_Backup_${
@@ -3026,33 +3465,42 @@ export default function App() {
                   .split('T')[0]
               }.json`;
 
+
             emergencyAnchor.style.display =
               'none';
+
 
             document.body.appendChild(
               emergencyAnchor
             );
 
+
             emergencyAnchor.click();
+
 
             document.body.removeChild(
               emergencyAnchor
             );
 
+
             URL.revokeObjectURL(
               emergencyUrl
             );
 
+
             console.log(
               'Emergency Nodysom AI export completed.'
             );
+
           } catch (
             emergencyError
           ) {
+
             console.error(
               'Emergency export failed:',
               emergencyError
             );
+
 
             alert(
               'Nodysom AI could not export your data. Please try again.'
@@ -3079,6 +3527,7 @@ export default function App() {
           : ''
       }`}
     >
+
       <div
         className={`w-full flex flex-col transition-all duration-300 ${
           isPhoneFrame
@@ -3087,18 +3536,34 @@ export default function App() {
         }`}
       >
 
+        {/* =================================================
+            PHONE FRAME TOP
+            ================================================= */}
+
         {isPhoneFrame && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4 bg-slate-900 rounded-full z-40 flex items-center justify-center">
+
             <div className="w-10 h-1 bg-slate-800 rounded-full" />
 
             <div className="w-2.5 h-2.5 rounded-full bg-slate-950 ml-2 border border-slate-800" />
+
           </div>
         )}
 
 
+        {/* =================================================
+            TOP HEADER
+            ================================================= */}
+
         <TopHeader
-          user={user}
-          isOnline={isOnline}
+          user={
+            user
+          }
+
+          isOnline={
+            isOnline
+          }
+
           isPhoneFrame={
             isPhoneFrame
           }
@@ -3123,6 +3588,10 @@ export default function App() {
         />
 
 
+        {/* =================================================
+            MAIN CONTENT
+            ================================================= */}
+
         <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
 
           <Suspense
@@ -3137,8 +3606,11 @@ export default function App() {
 
             {currentTab ===
               'home' && (
+
               <HomeView
-                user={user}
+                user={
+                  user
+                }
 
                 chatHistory={
                   chatHistory
@@ -3180,15 +3652,17 @@ export default function App() {
                   )
                 }
               />
+
             )}
 
 
             {/* =================================================
-                DEDICATED CHATGPT-STYLE AI CHAT
+                CHAT
                 ================================================= */}
 
             {currentTab ===
               'chat' && (
+
               <ChatView
                 user={
                   user
@@ -3210,6 +3684,7 @@ export default function App() {
                   handleNewChat
                 }
               />
+
             )}
 
 
@@ -3219,10 +3694,12 @@ export default function App() {
 
             {currentTab ===
               'search' && (
+
               <SearchView
                 onTriggerAction={(
                   act
                 ) => {
+
                   setCurrentTab(
                     'home'
                   );
@@ -3236,6 +3713,7 @@ export default function App() {
                   user.preferredLanguage
                 }
               />
+
             )}
 
 
@@ -3245,10 +3723,12 @@ export default function App() {
 
             {currentTab ===
               'learn' && (
+
               <LearnView
                 onOpenLesson={(
                   topic
                 ) => {
+
                   setCurrentTab(
                     'home'
                   );
@@ -3258,6 +3738,7 @@ export default function App() {
                   );
                 }}
               />
+
             )}
 
 
@@ -3267,6 +3748,7 @@ export default function App() {
 
             {currentTab ===
               'planner' && (
+
               <PlannerView
                 plannerItems={
                   plannerItems
@@ -3288,6 +3770,7 @@ export default function App() {
                   handleToggleHabit
                 }
               />
+
             )}
 
 
@@ -3297,8 +3780,11 @@ export default function App() {
 
             {currentTab ===
               'profile' && (
+
               <ProfileView
-                user={user}
+                user={
+                  user
+                }
 
                 memories={
                   memories
@@ -3316,12 +3802,6 @@ export default function App() {
                   handleDeleteMemory
                 }
 
-                /**
-                 * IMPORTANT:
-                 *
-                 * Export My Data now uses the new complete
-                 * exporter above.
-                 */
                 onExportData={
                   handleExportAllData
                 }
@@ -3354,6 +3834,7 @@ export default function App() {
                   handleCloudSignOut
                 }
               />
+
             )}
 
           </Suspense>
@@ -3382,9 +3863,13 @@ export default function App() {
             )
           }
 
-          user={user}
+          user={
+            user
+          }
 
-          isOnline={isOnline}
+          isOnline={
+            isOnline
+          }
 
           isPhoneFrame={
             isPhoneFrame
@@ -3422,6 +3907,7 @@ export default function App() {
           onSubmitVoicePrompt={(
             prompt
           ) => {
+
             setCurrentTab(
               'home'
             );
@@ -3490,6 +3976,7 @@ export default function App() {
         />
 
       </div>
+
     </div>
   );
 }
