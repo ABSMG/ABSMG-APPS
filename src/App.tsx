@@ -1,4 +1,6 @@
 import React, {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -36,17 +38,81 @@ import {
   BottomNav,
 } from './components/Navigation';
 
-import { HomeView } from './components/HomeView';
+// =========================================================
+// LAZY-LOADED MAIN VIEWS
+// =========================================================
+//
+// These views are loaded only when they are actually needed.
+// This reduces the amount of JavaScript required during the
+// first Nodysom AI startup without removing any feature.
+//
+// Some views use named exports, so they are converted to the
+// default export expected by React.lazy().
+// =========================================================
 
-import { ChatView } from './components/ChatView';
+const HomeView = lazy(
+  () =>
+    import('./components/HomeView').then(
+      (module) => ({
+        default:
+          module.HomeView,
+      })
+    )
+);
 
-import { SearchView } from './components/SearchView';
+const ChatView = lazy(
+  () =>
+    import('./components/ChatView')
+);
 
-import { PlannerView } from './components/PlannerView';
+const SearchView = lazy(
+  () =>
+    import('./components/SearchView').then(
+      (module) => ({
+        default:
+          module.SearchView,
+      })
+    )
+);
 
-import { LearnView } from './components/LearnView';
+const PlannerView = lazy(
+  () =>
+    import('./components/PlannerView').then(
+      (module) => ({
+        default:
+          module.PlannerView,
+      })
+    )
+);
 
-import { ProfileView } from './components/ProfileView';
+const LearnView = lazy(
+  () =>
+    import('./components/LearnView').then(
+      (module) => ({
+        default:
+          module.LearnView,
+      })
+    )
+);
+
+const ProfileView = lazy(
+  () =>
+    import('./components/ProfileView').then(
+      (module) => ({
+        default:
+          module.ProfileView,
+      })
+    )
+);
+
+// =========================================================
+// MODALS
+// =========================================================
+//
+// Modals remain eagerly available because they can be opened
+// from several parts of the application and are relatively
+// small compared with the main views.
+// =========================================================
 
 import {
   VoiceAssistantModal,
@@ -263,6 +329,27 @@ function mergeChatHistoryForExport(
         chatOrderValue(a, 0) -
         chatOrderValue(b, 0)
     );
+}
+
+
+// =========================================================
+// VIEW LOADING FALLBACK
+// =========================================================
+
+function ViewLoading() {
+  return (
+    <div className="min-h-[320px] w-full flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+
+        <div className="h-8 w-8 rounded-full border-2 border-slate-700 border-t-blue-500 animate-spin" />
+
+        <div className="text-sm text-slate-400">
+          Loading Nodysom AI…
+        </div>
+
+      </div>
+    </div>
+  );
 }
 
 
@@ -657,8 +744,13 @@ export default function App() {
             // =================================================
             // WRITE MERGED DATA BACK TO CLOUD
             // =================================================
+            //
+            // The merged state has already been restored locally.
+            // Cloud write is kept asynchronous so the UI does not
+            // remain blocked unnecessarily after hydration.
+            // =================================================
 
-            await saveCloudData(
+            void saveCloudData(
               userId,
               {
                 user:
@@ -675,6 +767,13 @@ export default function App() {
 
                 chatHistory:
                   restoredChat,
+              }
+            ).catch(
+              (error) => {
+                console.error(
+                  'Merged cloud data save error:',
+                  error
+                );
               }
             );
 
@@ -726,9 +825,24 @@ export default function App() {
           };
 
 
-          await saveCloudData(
+          // =================================================
+          // IMPORTANT:
+          //
+          // Do not block the application UI longer than needed.
+          // The local state is already available, so the initial
+          // cloud backup is started asynchronously.
+          // =================================================
+
+          void saveCloudData(
             userId,
             initialCloudData
+          ).catch(
+            (error) => {
+              console.error(
+                'Initial cloud backup error:',
+                error
+              );
+            }
           );
 
 
@@ -2564,230 +2678,238 @@ export default function App() {
 
         <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
 
-          {/* =================================================
-              HOME
-              ================================================= */}
+          <Suspense
+            fallback={
+              <ViewLoading />
+            }
+          >
 
-          {currentTab ===
-            'home' && (
-            <HomeView
-              user={user}
+            {/* =================================================
+                HOME
+                ================================================= */}
 
-              chatHistory={
-                chatHistory
-              }
+            {currentTab ===
+              'home' && (
+              <HomeView
+                user={user}
 
-              plannerItems={
-                plannerItems
-              }
+                chatHistory={
+                  chatHistory
+                }
 
-              onSendMessage={
-                handleSendMessage
-              }
+                plannerItems={
+                  plannerItems
+                }
 
-              isLoading={
-                isLoadingAI
-              }
+                onSendMessage={
+                  handleSendMessage
+                }
 
-              onOpenVoice={() =>
-                setIsVoiceOpen(
-                  true
-                )
-              }
+                isLoading={
+                  isLoadingAI
+                }
 
-              onToggleTask={
-                handleToggleTask
-              }
+                onOpenVoice={() =>
+                  setIsVoiceOpen(
+                    true
+                  )
+                }
 
-              onSelectAction={(
-                action
-              ) =>
-                setPendingAction(
+                onToggleTask={
+                  handleToggleTask
+                }
+
+                onSelectAction={(
                   action
-                )
-              }
+                ) =>
+                  setPendingAction(
+                    action
+                  )
+                }
 
-              onNavigate={(tab) =>
-                setCurrentTab(
-                  tab as TabType
-                )
-              }
-            />
-          )}
-
-
-          {/* =================================================
-              DEDICATED CHATGPT-STYLE AI CHAT
-              ================================================= */}
-
-          {currentTab ===
-            'chat' && (
-            <ChatView
-              user={
-                user
-              }
-
-              chatHistory={
-                chatHistory
-              }
-
-              isLoading={
-                isLoadingAI
-              }
-
-              onSendMessage={
-                handleSendMessage
-              }
-
-              onNewChat={
-                handleNewChat
-              }
-            />
-          )}
+                onNavigate={(tab) =>
+                  setCurrentTab(
+                    tab as TabType
+                  )
+                }
+              />
+            )}
 
 
-          {/* =================================================
-              SEARCH
-              ================================================= */}
+            {/* =================================================
+                DEDICATED CHATGPT-STYLE AI CHAT
+                ================================================= */}
 
-          {currentTab ===
-            'search' && (
-            <SearchView
-              onTriggerAction={(
-                act
-              ) => {
-                setCurrentTab(
-                  'home'
-                );
+            {currentTab ===
+              'chat' && (
+              <ChatView
+                user={
+                  user
+                }
 
-                handleSendMessage(
+                chatHistory={
+                  chatHistory
+                }
+
+                isLoading={
+                  isLoadingAI
+                }
+
+                onSendMessage={
+                  handleSendMessage
+                }
+
+                onNewChat={
+                  handleNewChat
+                }
+              />
+            )}
+
+
+            {/* =================================================
+                SEARCH
+                ================================================= */}
+
+            {currentTab ===
+              'search' && (
+              <SearchView
+                onTriggerAction={(
                   act
-                );
-              }}
+                ) => {
+                  setCurrentTab(
+                    'home'
+                  );
 
-              preferredLanguage={
-                user.preferredLanguage
-              }
-            />
-          )}
+                  handleSendMessage(
+                    act
+                  );
+                }}
 
-
-          {/* =================================================
-              LEARN
-              ================================================= */}
-
-          {currentTab ===
-            'learn' && (
-            <LearnView
-              onOpenLesson={(
-                topic
-              ) => {
-                setCurrentTab(
-                  'home'
-                );
-
-                handleSendMessage(
-                  `Teach me about ${topic}. Explain it step by step in a simple and practical way.`
-                );
-              }}
-            />
-          )}
+                preferredLanguage={
+                  user.preferredLanguage
+                }
+              />
+            )}
 
 
-          {/* =================================================
-              PLANNER
-              ================================================= */}
+            {/* =================================================
+                LEARN
+                ================================================= */}
 
-          {currentTab ===
-            'planner' && (
-            <PlannerView
-              plannerItems={
-                plannerItems
-              }
+            {currentTab ===
+              'learn' && (
+              <LearnView
+                onOpenLesson={(
+                  topic
+                ) => {
+                  setCurrentTab(
+                    'home'
+                  );
 
-              habits={
-                habits
-              }
-
-              onToggleTask={
-                handleToggleTask
-              }
-
-              onAddTask={
-                handleAddTask
-              }
-
-              onToggleHabit={
-                handleToggleHabit
-              }
-            />
-          )}
+                  handleSendMessage(
+                    `Teach me about ${topic}. Explain it step by step in a simple and practical way.`
+                  );
+                }}
+              />
+            )}
 
 
-          {/* =================================================
-              PROFILE
-              ================================================= */}
+            {/* =================================================
+                PLANNER
+                ================================================= */}
 
-          {currentTab ===
-            'profile' && (
-            <ProfileView
-              user={user}
+            {currentTab ===
+              'planner' && (
+              <PlannerView
+                plannerItems={
+                  plannerItems
+                }
 
-              memories={
-                memories
-              }
+                habits={
+                  habits
+                }
 
-              onUpdateUser={
-                handleUpdateUser
-              }
+                onToggleTask={
+                  handleToggleTask
+                }
 
-              onAddMemory={
-                handleAddMemory
-              }
+                onAddTask={
+                  handleAddTask
+                }
 
-              onDeleteMemory={
-                handleDeleteMemory
-              }
+                onToggleHabit={
+                  handleToggleHabit
+                }
+              />
+            )}
 
-              /**
-               * IMPORTANT:
-               *
-               * Export My Data now uses the new complete
-               * exporter above.
-               */
-              onExportData={
-                handleExportAllData
-              }
 
-              onClearAllData={
-                handleClearAllData
-              }
+            {/* =================================================
+                PROFILE
+                ================================================= */}
 
-              cloudEnabled={
-                isSupabaseConfigured
-              }
+            {currentTab ===
+              'profile' && (
+              <ProfileView
+                user={user}
 
-              cloudEmail={
-                cloudEmail
-              }
+                memories={
+                  memories
+                }
 
-              cloudBusy={
-                cloudBusy
-              }
+                onUpdateUser={
+                  handleUpdateUser
+                }
 
-              onSignIn={
-                handleCloudSignIn
-              }
+                onAddMemory={
+                  handleAddMemory
+                }
 
-              onSignUp={
-                handleCloudSignUp
-              }
+                onDeleteMemory={
+                  handleDeleteMemory
+                }
 
-              onSignOut={
-                handleCloudSignOut
-              }
-            />
-          )}
+                /**
+                 * IMPORTANT:
+                 *
+                 * Export My Data now uses the new complete
+                 * exporter above.
+                 */
+                onExportData={
+                  handleExportAllData
+                }
+
+                onClearAllData={
+                  handleClearAllData
+                }
+
+                cloudEnabled={
+                  isSupabaseConfigured
+                }
+
+                cloudEmail={
+                  cloudEmail
+                }
+
+                cloudBusy={
+                  cloudBusy
+                }
+
+                onSignIn={
+                  handleCloudSignIn
+                }
+
+                onSignUp={
+                  handleCloudSignUp
+                }
+
+                onSignOut={
+                  handleCloudSignOut
+                }
+              />
+            )}
+
+          </Suspense>
 
         </main>
 
