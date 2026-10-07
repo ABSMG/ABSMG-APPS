@@ -59,13 +59,81 @@ export interface PlannerItem {
   tags?: string[];
 }
 
+/**
+ * Habit tracking data.
+ *
+ * `history` stores the exact calendar dates on which
+ * the habit was completed.
+ *
+ * Example:
+ * [
+ *   "2026-10-01",
+ *   "2026-10-02",
+ *   "2026-10-03"
+ * ]
+ *
+ * The history is the source of truth for calculating
+ * the current streak. The `streak` field is preserved
+ * for backward compatibility with existing Nodysom data
+ * and UI components.
+ */
 export interface HabitItem {
   id: string;
+
   name: string;
+
   category: string;
+
+  /**
+   * Cached/current streak value.
+   *
+   * This field is preserved because existing Nodysom
+   * components and stored user data may still use it.
+   *
+   * New habit logic should calculate the streak from
+   * `history` rather than blindly incrementing/decrementing
+   * this value.
+   */
   streak: number;
+
+  /**
+   * Whether this habit is completed for the current
+   * local calendar day.
+   *
+   * This is preserved for existing UI compatibility.
+   */
   completedToday: boolean;
-  history: string[]; // dates completed
+
+  /**
+   * Calendar dates when the habit was completed.
+   *
+   * Format:
+   * YYYY-MM-DD
+   *
+   * This is the source of truth for streak calculation.
+   */
+  history: string[];
+
+  /**
+   * Optional timestamp for the most recent completion.
+   *
+   * This is useful for synchronization and future
+   * analytics, while `history` remains the source of
+   * truth for daily completion.
+   */
+  lastCompletedAt?: string;
+
+  /**
+   * Optional timestamp indicating when the habit was
+   * created.
+   */
+  createdAt?: string;
+
+  /**
+   * Optional timestamp indicating when the habit was
+   * last updated.
+   */
+  updatedAt?: string;
 }
 
 export interface SmartAction {
