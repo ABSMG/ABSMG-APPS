@@ -132,260 +132,457 @@ const DEFAULT_SCHEDULE: ScheduleBlock[] = [
 const getLocalISODate = (
   date = new Date()
 ) => {
-  const year = date.getFullYear();
+  const year =
+    date.getFullYear();
 
-  const month = String(
-    date.getMonth() + 1
-  ).padStart(2, '0');
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(2, '0');
 
-  const day = String(
-    date.getDate()
-  ).padStart(2, '0');
+  const day =
+    String(
+      date.getDate()
+    ).padStart(2, '0');
 
   return `${year}-${month}-${day}`;
 };
 
 /*
- * Habit data can now optionally contain:
+ * Validate a calendar date stored in
+ * YYYY-MM-DD format.
  *
- * completionDates?: string[]
- *
- * Example:
- *
- * completionDates: [
- *   "2026-10-01",
- *   "2026-10-02",
- *   "2026-10-03"
- * ]
- *
- * The optional shape keeps this component compatible
- * with older saved HabitItem data.
+ * This prevents malformed history values
+ * from affecting streak calculations.
  */
-type HabitWithHistory =
-  HabitItem & {
-    completionDates?: unknown;
-  };
+const isValidISODate = (
+  value: unknown
+): value is string => {
+  if (
+    typeof value !==
+    'string'
+  ) {
+    return false;
+  }
 
-const getHabitCompletionDates = (
+  const trimmed =
+    value.trim();
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(
+      trimmed
+    )
+  ) {
+    return false;
+  }
+
+  const [
+    yearText,
+    monthText,
+    dayText,
+  ] =
+    trimmed.split('-');
+
+  const year =
+    Number(yearText);
+
+  const month =
+    Number(monthText);
+
+  const day =
+    Number(dayText);
+
+  if (
+    !Number.isInteger(
+      year
+    ) ||
+    !Number.isInteger(
+      month
+    ) ||
+    !Number.isInteger(
+      day
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return false;
+  }
+
+  const date =
+    new Date(
+      year,
+      month - 1,
+      day
+    );
+
+  return (
+    date.getFullYear() ===
+      year &&
+    date.getMonth() ===
+      month - 1 &&
+    date.getDate() ===
+      day
+  );
+};
+
+/*
+ * Normalize habit history.
+ *
+ * The app's canonical history field is:
+ *
+ * history: string[]
+ *
+ * where every value is:
+ *
+ * YYYY-MM-DD
+ *
+ * Duplicate dates are removed and the
+ * result is sorted chronologically.
+ */
+const getHabitHistory = (
   habit: HabitItem
 ): string[] => {
-  const candidate =
-    (
-      habit as HabitWithHistory
-    ).completionDates;
-
-  if (!Array.isArray(candidate)) {
-    return [];
-  }
+  const history =
+    Array.isArray(
+      habit.history
+    )
+      ? habit.history
+      : [];
 
   const uniqueDates =
     new Set<string>();
 
-  candidate.forEach((value) => {
-    if (
-      typeof value !== 'string'
-    ) {
-      return;
-    }
+  history.forEach(
+    (value) => {
+      if (
+        !isValidISODate(
+          value
+        )
+      ) {
+        return;
+      }
 
-    const trimmed =
-      value.trim();
-
-    if (
-      /^\d{4}-\d{2}-\d{2}$/.test(
-        trimmed
-      )
-    ) {
-      uniqueDates.add(trimmed);
+      uniqueDates.add(
+        value
+      );
     }
-  });
+  );
 
   return Array.from(
     uniqueDates
   ).sort();
 };
 
-const calculateHabitStreak = (
+/*
+ * Return a normalized habit object.
+ *
+ * This keeps the component compatible
+ * with older saved data while making
+ * history the source of truth.
+ */
+const normalizeHabit = (
   habit: HabitItem,
   todayISO: string
-) => {
-  const completionDates =
-    getHabitCompletionDates(
+): HabitItem => {
+  const history =
+    getHabitHistory(
       habit
     );
 
-  /*
-   * New date-based streak engine.
-   *
-   * If completion history exists,
-   * calculate the streak from actual
-   * calendar dates instead of blindly
-   * trusting habit.streak.
-   */
-  if (
-    completionDates.length > 0
-  ) {
-    const completed =
-      new Set(completionDates);
+  const completedToday =
+    history.includes(
+      todayISO
+    );
 
-    let cursor =
-      new Date(
-        `${todayISO}T00:00:00`
-      );
-
-    /*
-     * If today has not been completed,
-     * a valid current streak may still
-     * end yesterday.
-     */
-    if (
-      !completed.has(todayISO)
-    ) {
-      cursor.setDate(
-        cursor.getDate() - 1
-      );
-    }
-
-    let streak = 0;
-
-    while (true) {
-      const date =
-        getLocalISODate(
-          cursor
-        );
-
-      if (
-        !completed.has(date)
-      ) {
-        break;
-      }
-
-      streak += 1;
-
-      cursor.setDate(
-        cursor.getDate() - 1
-      );
-
-      /*
-       * Safety limit prevents malformed
-       * data from creating an endless loop.
-       */
-      if (streak >= 10000) {
-        break;
-      }
-    }
-
-    return streak;
-  }
-
-  /*
-   * Backward compatibility for existing
-   * users whose habits only contain
-   * streak/completedToday.
-   */
-  const legacyStreak =
-    Number(habit.streak);
-
-  return Number.isFinite(
-    legacyStreak
-  ) &&
-    legacyStreak > 0
-    ? Math.max(
-        0,
-        Math.floor(
-          legacyStreak
-        )
-      )
-    : 0;
+  return {
+    ...habit,
+    history,
+    completedToday,
+    streak:
+      calculateHabitStreakFromHistory(
+        history,
+        todayISO
+      ),
+  };
 };
 
-const calculateBestHabitStreak = (
-  habit: HabitItem
-) => {
-  const completionDates =
-    getHabitCompletionDates(
-      habit
-    );
-
+/*
+ * Calculate the current habit streak
+ * from actual completion dates.
+ *
+ * Rules:
+ *
+ * 1. If today is completed, count
+ *    backward starting from today.
+ *
+ * 2. If today is not completed, allow
+ *    the current streak to continue from
+ *    yesterday.
+ *
+ * 3. A missing full day breaks the streak.
+ *
+ * 4. The value is based on dates,
+ *    not on blindly incrementing/decrementing
+ *    an old streak number.
+ */
+const calculateHabitStreakFromHistory = (
+  history: string[],
+  todayISO: string
+): number => {
   if (
-    completionDates.length === 0
+    history.length ===
+    0
   ) {
-    const legacyStreak =
-      Number(habit.streak);
-
-    return Number.isFinite(
-      legacyStreak
-    )
-      ? Math.max(
-          0,
-          Math.floor(
-            legacyStreak
-          )
-        )
-      : 0;
+    return 0;
   }
 
   const completed =
-    new Set(completionDates);
+    new Set(history);
 
-  let best = 0;
-  let current = 0;
+  let cursor =
+    new Date(
+      `${todayISO}T00:00:00`
+    );
 
-  const sorted =
-    Array.from(completed)
-      .sort();
+  if (
+    !completed.has(
+      todayISO
+    )
+  ) {
+    cursor.setDate(
+      cursor.getDate() - 1
+    );
+  }
 
-  let previousDate:
-    | Date
-    | null = null;
+  let streak = 0;
 
-  sorted.forEach(
-    (dateString) => {
-      const currentDate =
-        new Date(
-          `${dateString}T00:00:00`
-        );
+  while (true) {
+    const date =
+      getLocalISODate(
+        cursor
+      );
 
-      if (
-        !previousDate
-      ) {
-        current = 1;
-      } else {
-        const difference =
-          Math.round(
-            (
-              currentDate.getTime() -
-              previousDate.getTime()
-            ) /
-              86400000
+    if (
+      !completed.has(
+        date
+      )
+    ) {
+      break;
+    }
+
+    streak += 1;
+
+    cursor.setDate(
+      cursor.getDate() - 1
+    );
+
+    /*
+     * Safety limit for malformed
+     * or unexpectedly huge histories.
+     */
+    if (
+      streak >= 10000
+    ) {
+      break;
+    }
+  }
+
+  return streak;
+};
+
+/*
+ * Calculate the all-time best streak
+ * from the complete completion history.
+ */
+const calculateBestHabitStreakFromHistory =
+  (
+    history: string[]
+  ): number => {
+    if (
+      history.length ===
+      0
+    ) {
+      return 0;
+    }
+
+    const sorted =
+      Array.from(
+        new Set(
+          history
+        )
+      ).sort();
+
+    if (
+      sorted.length ===
+      0
+    ) {
+      return 0;
+    }
+
+    let best = 0;
+
+    let current = 0;
+
+    let previousDate:
+      | Date
+      | null = null;
+
+    sorted.forEach(
+      (dateString) => {
+        const currentDate =
+          new Date(
+            `${dateString}T00:00:00`
           );
 
         if (
-          difference === 1
+          Number.isNaN(
+            currentDate.getTime()
+          )
         ) {
-          current += 1;
-        } else {
-          current = 1;
+          return;
         }
-      }
 
-      best = Math.max(
-        best,
-        current
+        if (
+          previousDate ===
+          null
+        ) {
+          current = 1;
+        } else {
+          const difference =
+            Math.round(
+              (
+                currentDate.getTime() -
+                previousDate.getTime()
+              ) /
+                86400000
+            );
+
+          if (
+            difference ===
+            1
+          ) {
+            current += 1;
+          } else {
+            current = 1;
+          }
+        }
+
+        best =
+          Math.max(
+            best,
+            current
+          );
+
+        previousDate =
+          currentDate;
+      }
+    );
+
+    return best;
+  };
+
+/*
+ * Backward-compatible current streak.
+ *
+ * If an old habit does not have history,
+ * use the stored streak temporarily.
+ *
+ * Once the habit is toggled, App.tsx
+ * will create proper history data.
+ */
+const calculateLegacyCompatibleStreak =
+  (
+    habit: HabitItem,
+    todayISO: string
+  ): number => {
+    const history =
+      getHabitHistory(
+        habit
       );
 
-      previousDate =
-        currentDate;
+    if (
+      history.length > 0
+    ) {
+      return calculateHabitStreakFromHistory(
+        history,
+        todayISO
+      );
     }
-  );
 
-  return best;
-};
+    const legacyStreak =
+      Number(
+        habit.streak
+      );
+
+    if (
+      !Number.isFinite(
+        legacyStreak
+      )
+    ) {
+      return 0;
+    }
+
+    return Math.max(
+      0,
+      Math.floor(
+        legacyStreak
+      )
+    );
+  };
+
+const calculateLegacyCompatibleBestStreak =
+  (
+    habit: HabitItem
+  ): number => {
+    const history =
+      getHabitHistory(
+        habit
+      );
+
+    if (
+      history.length > 0
+    ) {
+      return calculateBestHabitStreakFromHistory(
+        history
+      );
+    }
+
+    const legacyStreak =
+      Number(
+        habit.streak
+      );
+
+    if (
+      !Number.isFinite(
+        legacyStreak
+      )
+    ) {
+      return 0;
+    }
+
+    return Math.max(
+      0,
+      Math.floor(
+        legacyStreak
+      )
+    );
+  };
 
 const sanitizeSchedule = (
   value: unknown
 ): ScheduleBlock[] => {
-  if (!Array.isArray(value)) {
+  if (
+    !Array.isArray(
+      value
+    )
+  ) {
     return [];
   }
 
@@ -401,72 +598,81 @@ const sanitizeSchedule = (
           'object' &&
         item !== null
     )
-    .map((item) => {
-      const rawDuration =
-        Number(
-          item.durationMinutes
-        );
+    .map(
+      (
+        item
+      ) => {
+        const rawDuration =
+          Number(
+            item.durationMinutes
+          );
 
-      const durationMinutes =
-        Number.isFinite(
-          rawDuration
-        ) &&
-        rawDuration > 0
-          ? Math.min(
-              1440,
-              Math.round(
-                rawDuration
+        const durationMinutes =
+          Number.isFinite(
+            rawDuration
+          ) &&
+          rawDuration > 0
+            ? Math.min(
+                1440,
+                Math.round(
+                  rawDuration
+                )
               )
-            )
-          : undefined;
+            : undefined;
 
-      const time =
-        typeof item.time ===
-        'string'
-          ? item.time.trim()
-          : '';
+        const time =
+          typeof item.time ===
+          'string'
+            ? item.time.trim()
+            : '';
 
-      const title =
-        typeof item.title ===
-        'string'
-          ? item.title.trim()
-          : '';
+        const title =
+          typeof item.title ===
+          'string'
+            ? item.title.trim()
+            : '';
 
-      const category =
-        typeof item.category ===
-          'string' &&
-        item.category.trim()
-          ? item.category.trim()
-          : 'General';
+        const category =
+          typeof item.category ===
+            'string' &&
+          item.category.trim()
+            ? item.category.trim()
+            : 'General';
 
-      const notes =
-        typeof item.notes ===
-        'string'
-          ? item.notes.trim()
-          : '';
+        const notes =
+          typeof item.notes ===
+          'string'
+            ? item.notes.trim()
+            : '';
 
-      return {
-        time,
-        title,
-        category,
-        ...(durationMinutes
-          ? {
-              durationMinutes,
-            }
-          : {}),
-        ...(notes
-          ? {
-              notes,
-            }
-          : {}),
-      };
-    })
+        return {
+          time,
+          title,
+          category,
+          ...(durationMinutes
+            ? {
+                durationMinutes,
+              }
+            : {}),
+          ...(notes
+            ? {
+                notes,
+              }
+            : {}),
+        };
+      }
+    )
     .filter(
       (item) =>
-        item.time.length > 0 &&
-        item.title.length > 0
+        item.time.length >
+          0 &&
+        item.title.length >
+          0
     )
-    .slice(0, 12);
+    .slice(
+      0,
+      12
+    );
 };
 
 export const PlannerView: React.FC<
@@ -483,101 +689,158 @@ export const PlannerView: React.FC<
     setActiveTab,
   ] = useState<
     'schedule' | 'tasks' | 'habits'
-  >('schedule');
+  >(
+    'schedule'
+  );
 
   const [
     isGenerating,
     setIsGenerating,
-  ] = useState(false);
+  ] = useState(
+    false
+  );
 
   const [
     schedulePrompt,
     setSchedulePrompt,
-  ] = useState('');
+  ] = useState(
+    ''
+  );
 
   const [
     scheduleError,
     setScheduleError,
-  ] = useState('');
+  ] = useState(
+    ''
+  );
 
   const [
     scheduleSuccess,
     setScheduleSuccess,
-  ] = useState('');
+  ] = useState(
+    ''
+  );
 
   const [
     generatedSchedule,
     setGeneratedSchedule,
   ] = useState<
     ScheduleBlock[]
-  >(DEFAULT_SCHEDULE);
+  >(
+    DEFAULT_SCHEDULE
+  );
 
   const [
     selectedFilterTag,
     setSelectedFilterTag,
   ] = useState<
     string | null
-  >(null);
+  >(
+    null
+  );
 
   const [
     showAddModal,
     setShowAddModal,
-  ] = useState(false);
+  ] = useState(
+    false
+  );
 
   const [
     newTitle,
     setNewTitle,
-  ] = useState('');
+  ] = useState(
+    ''
+  );
 
   const [
     newType,
     setNewType,
   ] = useState<
     'task' | 'reminder'
-  >('task');
+  >(
+    'task'
+  );
 
   const [
     newTime,
     setNewTime,
-  ] = useState('09:00 AM');
+  ] = useState(
+    '09:00 AM'
+  );
 
   const [
     newPriority,
     setNewPriority,
   ] = useState<
     'low' | 'normal' | 'high'
-  >('normal');
+  >(
+    'normal'
+  );
 
   const [
     selectedTags,
     setSelectedTags,
-  ] = useState<string[]>(
-    ['Work']
-  );
+  ] = useState<
+    string[]
+  >([
+    'Work',
+  ]);
 
   const [
     customTagInput,
     setCustomTagInput,
-  ] = useState('');
+  ] = useState(
+    ''
+  );
 
-  const today = new Date();
+  const today =
+    new Date();
 
   const formattedDate =
     today.toLocaleDateString(
       undefined,
       {
-        weekday: 'long',
-        month: 'short',
-        day: 'numeric',
+        weekday:
+          'long',
+        month:
+          'short',
+        day:
+          'numeric',
       }
     );
 
   const todayISO =
-    getLocalISODate(today);
+    getLocalISODate(
+      today
+    );
 
   /*
-   * Calculate current streaks from
-   * actual dates whenever history exists.
+   * Normalize habit information for
+   * display without mutating the parent
+   * state.
+   *
+   * This means the UI always reflects
+   * actual completion dates.
+   */
+  const normalizedHabits =
+    useMemo(() => {
+      return habits.map(
+        (habit) =>
+          normalizeHabit(
+            habit,
+            todayISO
+          )
+      );
+    }, [
+      habits,
+      todayISO,
+    ]);
+
+  /*
+   * Current streaks are calculated from
+   * history rather than blindly trusting
+   * the old streak number.
    */
   const habitStreaks =
     useMemo(() => {
@@ -587,11 +850,11 @@ export const PlannerView: React.FC<
           number
         >();
 
-      habits.forEach(
+      normalizedHabits.forEach(
         (habit) => {
           result.set(
             habit.id,
-            calculateHabitStreak(
+            calculateLegacyCompatibleStreak(
               habit,
               todayISO
             )
@@ -601,13 +864,13 @@ export const PlannerView: React.FC<
 
       return result;
     }, [
-      habits,
+      normalizedHabits,
       todayISO,
     ]);
 
   /*
-   * Best streak is calculated from
-   * complete date history where available.
+   * Best streak is calculated from the
+   * complete history.
    */
   const habitBestStreaks =
     useMemo(() => {
@@ -617,11 +880,11 @@ export const PlannerView: React.FC<
           number
         >();
 
-      habits.forEach(
+      normalizedHabits.forEach(
         (habit) => {
           result.set(
             habit.id,
-            calculateBestHabitStreak(
+            calculateLegacyCompatibleBestStreak(
               habit
             )
           );
@@ -629,7 +892,9 @@ export const PlannerView: React.FC<
       );
 
       return result;
-    }, [habits]);
+    }, [
+      normalizedHabits,
+    ]);
 
   /* =========================
      AI SMART SCHEDULER
@@ -647,26 +912,39 @@ export const PlannerView: React.FC<
         return;
       }
 
-      setIsGenerating(true);
-      setScheduleError('');
-      setScheduleSuccess('');
+      setIsGenerating(
+        true
+      );
+
+      setScheduleError(
+        ''
+      );
+
+      setScheduleSuccess(
+        ''
+      );
 
       try {
         const response =
           await fetch(
             '/api/ai/smart-schedule',
             {
-              method: 'POST',
+              method:
+                'POST',
+
               headers: {
                 'Content-Type':
                   'application/json',
               },
-              body: JSON.stringify(
-                {
-                  prompt,
-                  date: todayISO,
-                }
-              ),
+
+              body:
+                JSON.stringify(
+                  {
+                    prompt,
+                    date:
+                      todayISO,
+                  }
+                ),
             }
           );
 
@@ -695,13 +973,17 @@ export const PlannerView: React.FC<
           data &&
           typeof data ===
             'object'
-            ? (data as Record<
-                string,
-                unknown
-              >)
+            ? (
+                data as Record<
+                  string,
+                  unknown
+                >
+              )
             : null;
 
-        if (!response.ok) {
+        if (
+          !response.ok
+        ) {
           const serverError =
             typeof responseData?.error ===
             'string'
@@ -731,7 +1013,9 @@ export const PlannerView: React.FC<
           safeSchedule
         );
 
-        setScheduleError('');
+        setScheduleError(
+          ''
+        );
 
         setScheduleSuccess(
           `Schedule generated successfully with ${safeSchedule.length} time ${
@@ -741,21 +1025,28 @@ export const PlannerView: React.FC<
               : 'blocks'
           }.`
         );
-      } catch (error) {
+      } catch (
+        error
+      ) {
         console.error(
           'Nodysom AI schedule generation failed:',
           error
         );
 
         setScheduleError(
-          error instanceof Error
+          error instanceof
+            Error
             ? error.message
             : 'Could not generate the schedule. Please try again.'
         );
 
-        setScheduleSuccess('');
+        setScheduleSuccess(
+          ''
+        );
       } finally {
-        setIsGenerating(false);
+        setIsGenerating(
+          false
+        );
       }
     };
 
@@ -764,16 +1055,24 @@ export const PlannerView: React.FC<
   ========================== */
 
   const handleSchedulePromptChange =
-    (value: string) => {
+    (
+      value: string
+    ) => {
       setSchedulePrompt(
         value
       );
 
-      if (scheduleError) {
-        setScheduleError('');
+      if (
+        scheduleError
+      ) {
+        setScheduleError(
+          ''
+        );
       }
 
-      if (scheduleSuccess) {
+      if (
+        scheduleSuccess
+      ) {
         setScheduleSuccess(
           ''
         );
@@ -781,13 +1080,20 @@ export const PlannerView: React.FC<
     };
 
   const handleSuggestion =
-    (suggestion: string) => {
+    (
+      suggestion: string
+    ) => {
       setSchedulePrompt(
         suggestion
       );
 
-      setScheduleError('');
-      setScheduleSuccess('');
+      setScheduleError(
+        ''
+      );
+
+      setScheduleSuccess(
+        ''
+      );
     };
 
   /* =========================
@@ -795,17 +1101,24 @@ export const PlannerView: React.FC<
   ========================== */
 
   const handleTogglePresetTag =
-    (tag: string) => {
+    (
+      tag: string
+    ) => {
       setSelectedTags(
-        (current) => {
+        (
+          current
+        ) => {
           if (
             current.includes(
               tag
             )
           ) {
             return current.filter(
-              (item) =>
-                item !== tag
+              (
+                item
+              ) =>
+                item !==
+                tag
             );
           }
 
@@ -822,15 +1135,21 @@ export const PlannerView: React.FC<
       const trimmed =
         customTagInput.trim();
 
-      if (!trimmed) {
+      if (
+        !trimmed
+      ) {
         return;
       }
 
       setSelectedTags(
-        (current) => {
+        (
+          current
+        ) => {
           const exists =
             current.some(
-              (tag) =>
+              (
+                tag
+              ) =>
                 tag.toLowerCase() ===
                 trimmed.toLowerCase()
             );
@@ -844,16 +1163,25 @@ export const PlannerView: React.FC<
         }
       );
 
-      setCustomTagInput('');
+      setCustomTagInput(
+        ''
+      );
     };
 
   const handleRemoveTag =
-    (tag: string) => {
+    (
+      tag: string
+    ) => {
       setSelectedTags(
-        (current) =>
+        (
+          current
+        ) =>
           current.filter(
-            (item) =>
-              item !== tag
+            (
+              item
+            ) =>
+              item !==
+              tag
           )
       );
     };
@@ -864,22 +1192,42 @@ export const PlannerView: React.FC<
 
   const handleOpenAddModal =
     () => {
-      setNewTitle('');
-      setNewType('task');
-      setNewTime('09:00 AM');
+      setNewTitle(
+        ''
+      );
+
+      setNewType(
+        'task'
+      );
+
+      setNewTime(
+        '09:00 AM'
+      );
+
       setNewPriority(
         'normal'
       );
-      setSelectedTags([
-        'Work',
-      ]);
-      setCustomTagInput('');
-      setShowAddModal(true);
+
+      setSelectedTags(
+        [
+          'Work',
+        ]
+      );
+
+      setCustomTagInput(
+        ''
+      );
+
+      setShowAddModal(
+        true
+      );
     };
 
   const handleCloseAddModal =
     () => {
-      setShowAddModal(false);
+      setShowAddModal(
+        false
+      );
     };
 
   /* =========================
@@ -895,26 +1243,35 @@ export const PlannerView: React.FC<
       const title =
         newTitle.trim();
 
-      if (!title) {
+      if (
+        !title
+      ) {
         return;
       }
 
-      const finalTags = [
-        ...selectedTags,
-      ];
+      const finalTags =
+        [
+          ...selectedTags,
+        ];
 
       const extraTag =
         customTagInput.trim();
 
-      if (extraTag) {
+      if (
+        extraTag
+      ) {
         const alreadyExists =
           finalTags.some(
-            (tag) =>
+            (
+              tag
+            ) =>
               tag.toLowerCase() ===
               extraTag.toLowerCase()
           );
 
-        if (!alreadyExists) {
+        if (
+          !alreadyExists
+        ) {
           finalTags.push(
             extraTag
           );
@@ -927,35 +1284,57 @@ export const PlannerView: React.FC<
 
       onAddTask({
         title,
-        type: newType,
-        date: todayISO,
+        type:
+          newType,
+        date:
+          todayISO,
         time:
           newTime.trim() ||
           '09:00 AM',
-        completed: false,
+        completed:
+          false,
         priority:
           newPriority,
         category:
           primaryCategory,
         tags:
-          finalTags.length > 0
+          finalTags.length >
+          0
             ? finalTags
             : [
                 primaryCategory,
               ],
       });
 
-      setNewTitle('');
-      setNewType('task');
-      setNewTime('09:00 AM');
+      setNewTitle(
+        ''
+      );
+
+      setNewType(
+        'task'
+      );
+
+      setNewTime(
+        '09:00 AM'
+      );
+
       setNewPriority(
         'normal'
       );
-      setSelectedTags([
-        'Work',
-      ]);
-      setCustomTagInput('');
-      setShowAddModal(false);
+
+      setSelectedTags(
+        [
+          'Work',
+        ]
+      );
+
+      setCustomTagInput(
+        ''
+      );
+
+      setShowAddModal(
+        false
+      );
     };
 
   /* =========================
@@ -971,7 +1350,9 @@ export const PlannerView: React.FC<
         >();
 
       PRESET_TAGS.forEach(
-        (tag) => {
+        (
+          tag
+        ) => {
           tagSet.set(
             tag.toLowerCase(),
             tag
@@ -980,8 +1361,12 @@ export const PlannerView: React.FC<
       );
 
       plannerItems.forEach(
-        (item) => {
-          if (item.category) {
+        (
+          item
+        ) => {
+          if (
+            item.category
+          ) {
             const key =
               item.category.toLowerCase();
 
@@ -997,9 +1382,13 @@ export const PlannerView: React.FC<
             }
           }
 
-          if (item.tags) {
+          if (
+            item.tags
+          ) {
             item.tags.forEach(
-              (tag) => {
+              (
+                tag
+              ) => {
                 const key =
                   tag.toLowerCase();
 
@@ -1022,7 +1411,9 @@ export const PlannerView: React.FC<
       return Array.from(
         tagSet.values()
       );
-    }, [plannerItems]);
+    }, [
+      plannerItems,
+    ]);
 
   const filteredTasks =
     useMemo(() => {
@@ -1036,10 +1427,13 @@ export const PlannerView: React.FC<
         selectedFilterTag.toLowerCase();
 
       return plannerItems.filter(
-        (item) => {
+        (
+          item
+        ) => {
           const tags =
             item.tags &&
-            item.tags.length > 0
+            item.tags.length >
+              0
               ? item.tags
               : item.category
                 ? [
@@ -1049,7 +1443,9 @@ export const PlannerView: React.FC<
 
           return (
             tags.some(
-              (tag) =>
+              (
+                tag
+              ) =>
                 tag.toLowerCase() ===
                 filter
             ) ||
@@ -1069,7 +1465,9 @@ export const PlannerView: React.FC<
 
   const completedTasks =
     plannerItems.filter(
-      (item) =>
+      (
+        item
+      ) =>
         item.completed
     ).length;
 
@@ -1078,23 +1476,30 @@ export const PlannerView: React.FC<
     completedTasks;
 
   const completionRate =
-    plannerItems.length > 0
+    plannerItems.length >
+    0
       ? Math.round(
-          (completedTasks /
-            plannerItems.length) *
+          (
+            completedTasks /
+            plannerItems.length
+          ) *
             100
         )
       : 0;
 
   const habitStreak =
-    habits.reduce(
-      (max, habit) => {
+    normalizedHabits.reduce(
+      (
+        max,
+        habit
+      ) => {
         const streak =
           habitStreaks.get(
             habit.id
           ) ??
-          Number(
-            habit.streak || 0
+          calculateLegacyCompatibleStreak(
+            habit,
+            todayISO
           );
 
         return Math.max(
@@ -1106,14 +1511,17 @@ export const PlannerView: React.FC<
     );
 
   const habitBestStreak =
-    habits.reduce(
-      (max, habit) => {
+    normalizedHabits.reduce(
+      (
+        max,
+        habit
+      ) => {
         const best =
           habitBestStreaks.get(
             habit.id
           ) ??
-          Number(
-            habit.streak || 0
+          calculateLegacyCompatibleBestStreak(
+            habit
           );
 
         return Math.max(
@@ -1125,8 +1533,10 @@ export const PlannerView: React.FC<
     );
 
   const completedHabits =
-    habits.filter(
-      (habit) =>
+    normalizedHabits.filter(
+      (
+        habit
+      ) =>
         habit.completedToday
     ).length;
 
@@ -1185,7 +1595,9 @@ export const PlannerView: React.FC<
 
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
               <p className="text-lg font-bold text-white">
-                {plannerItems.length}
+                {
+                  plannerItems.length
+                }
               </p>
 
               <p className="text-[10px] text-slate-500">
@@ -1195,7 +1607,9 @@ export const PlannerView: React.FC<
 
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
               <p className="text-lg font-bold text-emerald-300">
-                {completedTasks}
+                {
+                  completedTasks
+                }
               </p>
 
               <p className="text-[10px] text-slate-500">
@@ -1205,7 +1619,9 @@ export const PlannerView: React.FC<
 
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
               <p className="text-lg font-bold text-orange-300">
-                {habitBestStreak}
+                {
+                  habitBestStreak
+                }
               </p>
 
               <p className="text-[10px] text-slate-500">
@@ -1239,7 +1655,9 @@ export const PlannerView: React.FC<
             icon: Flame,
           },
         ].map(
-          (tab) => {
+          (
+            tab
+          ) => {
             const Icon =
               tab.icon;
 
@@ -1249,7 +1667,9 @@ export const PlannerView: React.FC<
 
             return (
               <button
-                key={tab.id}
+                key={
+                  tab.id
+                }
                 type="button"
                 onClick={() =>
                   setActiveTab(
@@ -1268,7 +1688,9 @@ export const PlannerView: React.FC<
                 <Icon className="h-4 w-4" />
 
                 <span>
-                  {tab.label}
+                  {
+                    tab.label
+                  }
                 </span>
               </button>
             );
@@ -1317,7 +1739,8 @@ export const PlannerView: React.FC<
                   event
                 ) =>
                   handleSchedulePromptChange(
-                    event.target.value
+                    event.target
+                      .value
                   )
                 }
                 onKeyDown={(
@@ -1338,7 +1761,9 @@ export const PlannerView: React.FC<
                   }
                 }}
                 placeholder="e.g. School 8 AM–2 PM, study 2 hours..."
-                maxLength={1000}
+                maxLength={
+                  1000
+                }
                 className="min-h-11 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs text-white outline-none transition focus:border-indigo-500"
               />
 
@@ -1387,7 +1812,9 @@ export const PlannerView: React.FC<
                 <X className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 
                 <span>
-                  {scheduleError}
+                  {
+                    scheduleError
+                  }
                 </span>
               </div>
             )}
@@ -1403,7 +1830,9 @@ export const PlannerView: React.FC<
                 <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 
                 <span>
-                  {scheduleSuccess}
+                  {
+                    scheduleSuccess
+                  }
                 </span>
               </div>
             )}
@@ -1417,7 +1846,9 @@ export const PlannerView: React.FC<
                 'Work + study',
                 'Balanced day',
               ].map(
-                (suggestion) => (
+                (
+                  suggestion
+                ) => (
                   <button
                     key={
                       suggestion
@@ -1501,7 +1932,9 @@ export const PlannerView: React.FC<
                       <div className="flex flex-wrap items-center justify-between gap-2">
 
                         <span className="text-[11px] font-bold text-indigo-400">
-                          {block.time}
+                          {
+                            block.time
+                          }
                         </span>
 
                         <span
@@ -1517,7 +1950,9 @@ export const PlannerView: React.FC<
                       </div>
 
                       <h3 className="mt-2 text-sm font-bold text-white">
-                        {block.title}
+                        {
+                          block.title
+                        }
                       </h3>
 
                       {typeof block.durationMinutes ===
@@ -1566,7 +2001,10 @@ export const PlannerView: React.FC<
               </p>
 
               <p className="mt-1 text-xs text-slate-400">
-                {pendingTasks} pending ·{' '}
+                {
+                  pendingTasks
+                }{' '}
+                pending ·{' '}
                 {
                   completedTasks
                 }{' '}
@@ -1640,9 +2078,13 @@ export const PlannerView: React.FC<
               </button>
 
               {allAvailableTags.map(
-                (tag) => (
+                (
+                  tag
+                ) => (
                   <button
-                    key={tag}
+                    key={
+                      tag
+                    }
                     type="button"
                     onClick={() =>
                       setSelectedFilterTag(
@@ -1658,7 +2100,9 @@ export const PlannerView: React.FC<
                           )
                     }`}
                   >
-                    {tag}
+                    {
+                      tag
+                    }
                   </button>
                 )
               )}
@@ -1678,15 +2122,19 @@ export const PlannerView: React.FC<
               </div>
 
               <h3 className="mt-4 text-sm font-bold text-slate-300">
-                {selectedFilterTag
-                  ? 'No matching items'
-                  : 'No tasks yet'}
+                {
+                  selectedFilterTag
+                    ? 'No matching items'
+                    : 'No tasks yet'
+                }
               </h3>
 
               <p className="mt-1 text-xs text-slate-500">
-                {selectedFilterTag
-                  ? 'Try another tag or clear the filter.'
-                  : 'Add your first task or reminder to get started.'}
+                {
+                  selectedFilterTag
+                    ? 'Try another tag or clear the filter.'
+                    : 'Add your first task or reminder to get started.'
+                }
               </p>
 
               {!selectedFilterTag && (
@@ -1708,7 +2156,9 @@ export const PlannerView: React.FC<
             <div className="space-y-2.5">
 
               {filteredTasks.map(
-                (item) => {
+                (
+                  item
+                ) => {
                   const tags =
                     item.tags &&
                     item.tags.length >
@@ -1722,7 +2172,9 @@ export const PlannerView: React.FC<
 
                   return (
                     <div
-                      key={item.id}
+                      key={
+                        item.id
+                      }
                       className={`rounded-2xl border p-4 transition ${
                         item.completed
                           ? 'border-emerald-500/10 bg-emerald-500/[0.03]'
@@ -1902,7 +2354,9 @@ export const PlannerView: React.FC<
                 </div>
 
                 <p className="mt-2 text-2xl font-bold text-white">
-                  {habitBestStreak}
+                  {
+                    habitBestStreak
+                  }
                 </p>
 
                 <p className="text-[10px] text-slate-500">
@@ -1929,7 +2383,7 @@ export const PlannerView: React.FC<
                   }
                   /
                   {
-                    habits.length
+                    normalizedHabits.length
                   }
                 </p>
 
@@ -1943,7 +2397,7 @@ export const PlannerView: React.FC<
 
           </div>
 
-          {habits.length ===
+          {normalizedHabits.length ===
           0 ? (
             <div className="rounded-3xl border border-dashed border-slate-800 bg-slate-950/50 p-8 text-center">
 
@@ -1963,15 +2417,17 @@ export const PlannerView: React.FC<
           ) : (
             <div className="space-y-2.5">
 
-              {habits.map(
-                (habit) => {
+              {normalizedHabits.map(
+                (
+                  habit
+                ) => {
                   const currentStreak =
                     habitStreaks.get(
                       habit.id
                     ) ??
-                    Number(
-                      habit.streak ||
-                        0
+                    calculateLegacyCompatibleStreak(
+                      habit,
+                      todayISO
                     );
 
                   return (
@@ -2143,7 +2599,9 @@ export const PlannerView: React.FC<
                     label: 'Reminder',
                   },
                 ].map(
-                  (type) => (
+                  (
+                    type
+                  ) => (
                     <button
                       key={
                         type.id
@@ -2189,7 +2647,8 @@ export const PlannerView: React.FC<
                     event
                   ) =>
                     setNewTitle(
-                      event.target.value
+                      event.target
+                        .value
                     )
                   }
                   placeholder="What do you need to do?"
@@ -2219,7 +2678,8 @@ export const PlannerView: React.FC<
                       event
                     ) =>
                       setNewTime(
-                        event.target.value
+                        event.target
+                          .value
                       )
                     }
                     maxLength={
@@ -2281,7 +2741,9 @@ export const PlannerView: React.FC<
                 <div className="flex flex-wrap gap-1.5">
 
                   {PRESET_TAGS.map(
-                    (tag) => {
+                    (
+                      tag
+                    ) => {
                       const active =
                         selectedTags.includes(
                           tag
@@ -2323,7 +2785,9 @@ export const PlannerView: React.FC<
                   <div className="mt-3 flex flex-wrap gap-1.5">
 
                     {selectedTags.map(
-                      (tag) => (
+                      (
+                        tag
+                      ) => (
                         <button
                           key={
                             tag
@@ -2361,7 +2825,8 @@ export const PlannerView: React.FC<
                       event
                     ) =>
                       setCustomTagInput(
-                        event.target.value
+                        event.target
+                          .value
                       )
                     }
                     onKeyDown={(
