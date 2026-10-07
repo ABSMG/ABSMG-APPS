@@ -148,6 +148,310 @@ const ONBOARDING_KEY =
 
 
 // =========================================================
+// HABIT DATE HELPERS
+// =========================================================
+//
+// Habit streaks are now calculated from actual calendar
+// completion dates instead of blindly increasing/decreasing
+// a numeric streak value.
+//
+// All dates are handled using the user's local calendar date.
+// =========================================================
+
+function getLocalISODate(
+  date: Date = new Date()
+): string {
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(
+      2,
+      '0'
+    );
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(
+      2,
+      '0'
+    );
+
+  return `${year}-${month}-${day}`;
+}
+
+
+function parseISODate(
+  dateString: string
+): Date | null {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(
+      dateString
+    )
+  ) {
+    return null;
+  }
+
+  const [
+    year,
+    month,
+    day,
+  ] =
+    dateString
+      .split('-')
+      .map(Number);
+
+  const date =
+    new Date(
+      year,
+      month - 1,
+      day
+    );
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    date.getFullYear() !==
+      year ||
+    date.getMonth() !==
+      month - 1 ||
+    date.getDate() !==
+      day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+
+function addDaysToISODate(
+  dateString: string,
+  amount: number
+): string {
+  const parsed =
+    parseISODate(
+      dateString
+    );
+
+  if (!parsed) {
+    return dateString;
+  }
+
+  parsed.setDate(
+    parsed.getDate() +
+      amount
+  );
+
+  return getLocalISODate(
+    parsed
+  );
+}
+
+
+function normalizeHabitHistory(
+  history: unknown
+): string[] {
+  if (
+    !Array.isArray(history)
+  ) {
+    return [];
+  }
+
+  const validDates =
+    history
+      .filter(
+        (
+          value
+        ): value is string =>
+          typeof value ===
+            'string' &&
+          /^\d{4}-\d{2}-\d{2}$/.test(
+            value
+          ) &&
+          Boolean(
+            parseISODate(
+              value
+            )
+          )
+      );
+
+  return Array.from(
+    new Set(
+      validDates
+    )
+  ).sort();
+}
+
+
+function calculateHabitStreak(
+  history: string[],
+  today: string = getLocalISODate()
+): number {
+  const normalizedHistory =
+    normalizeHabitHistory(
+      history
+    );
+
+  if (
+    normalizedHistory.length ===
+    0
+  ) {
+    return 0;
+  }
+
+  const historySet =
+    new Set(
+      normalizedHistory
+    );
+
+  /*
+   * The current streak must be connected to today.
+   *
+   * If the habit has not been completed today,
+   * the current streak may still be connected to
+   * yesterday. This gives the user a useful current
+   * streak during the current day while still ensuring
+   * that missing more than one day breaks the streak.
+   */
+  let streakStart =
+    today;
+
+  if (
+    !historySet.has(
+      streakStart
+    )
+  ) {
+    streakStart =
+      addDaysToISODate(
+        today,
+        -1
+      );
+
+    if (
+      !historySet.has(
+        streakStart
+      )
+    ) {
+      return 0;
+    }
+  }
+
+  let streak = 0;
+
+  let cursor =
+    streakStart;
+
+  while (
+    historySet.has(
+      cursor
+    )
+  ) {
+    streak += 1;
+
+    cursor =
+      addDaysToISODate(
+        cursor,
+        -1
+      );
+
+    if (
+      streak >
+      normalizedHistory.length
+    ) {
+      break;
+    }
+  }
+
+  return streak;
+}
+
+
+function normalizeHabit(
+  habit: HabitItem,
+  today: string = getLocalISODate()
+): HabitItem {
+  let history =
+    normalizeHabitHistory(
+      habit.history
+    );
+
+  /*
+   * Backward compatibility:
+   *
+   * Older Nodysom versions may have stored completedToday
+   * without storing today's date in history.
+   *
+   * If that old flag is true and today's date is missing,
+   * migrate it into the new date-based history model.
+   */
+  if (
+    habit.completedToday &&
+    !history.includes(
+      today
+    )
+  ) {
+    history = [
+      ...history,
+      today,
+    ].sort();
+  }
+
+  const completedToday =
+    history.includes(
+      today
+    );
+
+  const streak =
+    calculateHabitStreak(
+      history,
+      today
+    );
+
+  return {
+    ...habit,
+
+    history,
+
+    completedToday,
+
+    streak,
+
+    lastCompletedAt:
+      completedToday
+        ? (
+            habit.lastCompletedAt ||
+            new Date().toISOString()
+          )
+        : habit.lastCompletedAt,
+  };
+}
+
+
+function normalizeHabits(
+  habits: HabitItem[],
+  today: string = getLocalISODate()
+): HabitItem[] {
+  return habits.map(
+    (habit) =>
+      normalizeHabit(
+        habit,
+        today
+      )
+  );
+}
+
+
+// =========================================================
 // SAFE MERGE HELPERS
 // =========================================================
 
@@ -378,7 +682,9 @@ export default function App() {
 
   const [habits, setHabits] =
     useState<HabitItem[]>(() =>
-      Storage.getHabits()
+      normalizeHabits(
+        Storage.getHabits()
+      )
     );
 
   const [chatHistory, setChatHistory] =
@@ -510,6 +816,49 @@ export default function App() {
         );
       }
     };
+  }, []);
+
+
+  // =========================================================
+  // NORMALIZE EXISTING HABITS
+  // =========================================================
+  //
+  // This runs once when the application starts.
+  //
+  // It migrates old habit records into the date-based
+  // history system and recalculates their current streak.
+  // =========================================================
+
+  useEffect(() => {
+    const today =
+      getLocalISODate();
+
+    const currentHabits =
+      latestDataRef.current.habits;
+
+    const normalized =
+      normalizeHabits(
+        currentHabits,
+        today
+      );
+
+    const changed =
+      JSON.stringify(
+        normalized
+      ) !==
+      JSON.stringify(
+        currentHabits
+      );
+
+    if (changed) {
+      setHabits(
+        normalized
+      );
+
+      Storage.saveHabits(
+        normalized
+      );
+    }
   }, []);
 
 
@@ -673,10 +1022,15 @@ export default function App() {
             // HABITS
             // -------------------------------------------------
 
-            const restoredHabits =
+            const mergedHabits =
               mergeById(
                 cloudHabits,
                 localData.habits
+              );
+
+            const restoredHabits =
+              normalizeHabits(
+                mergedHabits
               );
 
 
@@ -807,6 +1161,11 @@ export default function App() {
           const localData =
             latestDataRef.current;
 
+          const normalizedLocalHabits =
+            normalizeHabits(
+              localData.habits
+            );
+
           const initialCloudData = {
             user:
               localData.user,
@@ -818,7 +1177,7 @@ export default function App() {
               localData.plannerItems,
 
             habits:
-              localData.habits,
+              normalizedLocalHabits,
 
             chatHistory:
               localData.chatHistory,
@@ -1402,11 +1761,28 @@ export default function App() {
   // =========================================================
   // HABITS
   // =========================================================
+  //
+  // DATE-BASED HABIT TRACKING
+  //
+  // The previous implementation did this:
+  //
+  //   completed -> streak + 1
+  //   uncompleted -> streak - 1
+  //
+  // That approach can become incorrect when days are skipped,
+  // the app is reopened later, or cloud/local data is merged.
+  //
+  // The new implementation records the exact completion date
+  // and calculates the streak from consecutive dates.
+  // =========================================================
 
   const handleToggleHabit =
     (
       id: string
     ) => {
+      const today =
+        getLocalISODate();
+
       const updated =
         habits.map(
           (habit) => {
@@ -1416,23 +1792,86 @@ export default function App() {
               return habit;
             }
 
-            const nextState =
-              !habit.completedToday;
+            const normalized =
+              normalizeHabit(
+                habit,
+                today
+              );
+
+            const history =
+              normalizeHabitHistory(
+                normalized.history
+              );
+
+            const completedToday =
+              history.includes(
+                today
+              );
+
+            let nextHistory:
+              string[];
+
+            let nextCompletedToday:
+              boolean;
+
+            if (
+              completedToday
+            ) {
+              /*
+               * Toggle OFF today's completion.
+               */
+              nextHistory =
+                history.filter(
+                  (date) =>
+                    date !== today
+                );
+
+              nextCompletedToday =
+                false;
+            } else {
+              /*
+               * Toggle ON today's completion.
+               */
+              nextHistory =
+                Array.from(
+                  new Set([
+                    ...history,
+                    today,
+                  ])
+                ).sort();
+
+              nextCompletedToday =
+                true;
+            }
+
+            const nextStreak =
+              calculateHabitStreak(
+                nextHistory,
+                today
+              );
+
+            const now =
+              new Date().toISOString();
 
             return {
-              ...habit,
+              ...normalized,
+
               completedToday:
-                nextState,
+                nextCompletedToday,
+
+              history:
+                nextHistory,
 
               streak:
-                nextState
-                  ? habit.streak +
-                    1
-                  : Math.max(
-                      0,
-                      habit.streak -
-                        1
-                    ),
+                nextStreak,
+
+              lastCompletedAt:
+                nextCompletedToday
+                  ? now
+                  : normalized.lastCompletedAt,
+
+              updatedAt:
+                now,
             };
           }
         );
@@ -2107,7 +2546,9 @@ export default function App() {
       );
 
       setHabits(
-        resetHabits
+        normalizeHabits(
+          resetHabits
+        )
       );
 
       setChatHistory(
@@ -2169,7 +2610,9 @@ export default function App() {
             Array.isArray(
               localData.habits
             )
-              ? localData.habits
+              ? normalizeHabits(
+                  localData.habits
+                )
               : [];
 
           let exportChat:
@@ -2278,9 +2721,11 @@ export default function App() {
                 // -------------------------------------------
 
                 exportHabits =
-                  mergeById(
-                    cloudHabits,
-                    exportHabits
+                  normalizeHabits(
+                    mergeById(
+                      cloudHabits,
+                      exportHabits
+                    )
                   );
 
 
@@ -2534,7 +2979,9 @@ export default function App() {
                 emergencyData.plannerItems,
 
               habits:
-                emergencyData.habits,
+                normalizeHabits(
+                  emergencyData.habits
+                ),
 
               chat:
                 emergencyData.chatHistory,
