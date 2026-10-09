@@ -3119,7 +3119,7 @@ export default function App() {
                 // USER
                 // =========================================
 
-                exportUser = {
+                                exportUser = {
                   ...(cloudData.user || {}),
                   ...(localData.user || {}),
 
@@ -3128,11 +3128,51 @@ export default function App() {
                     localData.user?.id ||
                     cloudUserId,
 
+                  name:
+                    cloudData.user?.name ||
+                    localData.user?.name ||
+                    'Nodysom User',
+
                   email:
                     cloudEmail ||
                     cloudData.user?.email ||
                     localData.user?.email ||
                     '',
+
+                  preferredLanguage:
+                    cloudData.user?.preferredLanguage ||
+                    localData.user?.preferredLanguage ||
+                    'en',
+
+                  country:
+                    cloudData.user?.country ||
+                    localData.user?.country ||
+                    '',
+
+                  tier:
+                    cloudData.user?.tier ||
+                    localData.user?.tier ||
+                    'FREE',
+
+                  lowDataMode:
+                    cloudData.user?.lowDataMode ??
+                    localData.user?.lowDataMode ??
+                    false,
+
+                  interests:
+                    cloudData.user?.interests ||
+                    localData.user?.interests ||
+                    [],
+
+                  goals:
+                    cloudData.user?.goals ||
+                    localData.user?.goals ||
+                    '',
+
+                  isGuest:
+                    cloudData.user?.isGuest ??
+                    localData.user?.isGuest ??
+                    false,
                 };
 
 
