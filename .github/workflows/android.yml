@@ -82,19 +82,22 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-          - name: Setup Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools'
+          packages: |
+            platform-tools
+            platforms;android-36
+            build-tools;35.0.0
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Install Android SDK
         run: |
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;35.0.0"
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
 
       - name: Configure Android API 36
         run: |
