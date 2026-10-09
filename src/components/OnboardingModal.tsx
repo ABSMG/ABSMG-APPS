@@ -104,7 +104,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ isOpen, onComp
               >
                 {SUPPORTED_LANGUAGES.map((l) => (
                   <option key={l.code} value={l.code}>
-                    {l.flag} {l.name} ({l.native})
+                    {l.flag} {l.name} ({(l as { native?: string }).native ?? l.name})
                   </option>
                 ))}
               </select>
