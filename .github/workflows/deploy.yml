@@ -109,6 +109,25 @@ jobs:
       # Secret lazima iitwe:
       # RENDER_DEPLOY_HOOK_URL
       # --------------------------------------------------
+           # --------------------------------------------------
+      # 9. Trigger Render deployment
+      # --------------------------------------------------
+      # Add RENDER_DEPLOY_HOOK_URL under GitHub Actions secrets.
+      # --------------------------------------------------
       - name: Trigger Render deployment
         env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RE
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "ERROR: RENDER_DEPLOY_HOOK_URL is missing."
+            echo "Add it under GitHub repository Actions secrets."
+            exit 1
+          fi
+
+          echo "Triggering Render deployment..."
+
+          curl --fail --silent --show-error \
+            --request POST \
+            "$RENDER_DEPLOY_HOOK_URL"
+
+          echo "Render deployment trigger sent successfully." 
