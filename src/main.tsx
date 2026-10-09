@@ -490,18 +490,20 @@ function registerNodysomServiceWorker() {
 
 if (
   document.readyState === "complete"
-) {
+) type NodysomWindow = Window & {
+  requestIdleCallback?: (
+    callback: IdleRequestCallback,
+    options?: IdleRequestOptions
+  ) => number;
+};
+
+const nodysomWindow = window as NodysomWindow;
+
+const scheduleServiceWorkerRegistration = (): void => {
   if (
-    "requestIdleCallback" in window
+    typeof nodysomWindow.requestIdleCallback === "function"
   ) {
-    (
-      window as Window & {
-        requestIdleCallback: (
-          callback: IdleRequestCallback,
-          options?: IdleRequestOptions
-        ) => number;
-      }
-    ).requestIdleCallback(
+    nodysomWindow.requestIdleCallback(
       () => {
         registerNodysomServiceWorker();
       },
@@ -511,38 +513,21 @@ if (
     );
   } else {
     window.setTimeout(
-      registerNodysomServiceWorker,
+      () => {
+        registerNodysomServiceWorker();
+      },
       0
     );
   }
+};
+
+if (document.readyState === "complete") {
+  scheduleServiceWorkerRegistration();
 } else {
   window.addEventListener(
     "load",
     () => {
-      if (
-        "requestIdleCallback" in window
-      ) {
-        (
-          window as Window & {
-            requestIdleCallback: (
-              callback: IdleRequestCallback,
-              options?: IdleRequestOptions
-            ) => number;
-          }
-        ).requestIdleCallback(
-          () => {
-            registerNodysomServiceWorker();
-          },
-          {
-            timeout: 2500,
-          }
-        );
-      } else {
-        window.setTimeout(
-          registerNodysomServiceWorker,
-          0
-        );
-      }
+      scheduleServiceWorkerRegistration();
     },
     {
       once: true,
@@ -550,6 +535,10 @@ if (
   );
 }
 
+
+// =========================================================
+// STARTUP TIMING INFORMATION
+  
 
 // =========================================================
 // STARTUP TIMING INFORMATION
