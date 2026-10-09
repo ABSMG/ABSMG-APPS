@@ -1,5 +1,5 @@
 {
-  "name": "LifeOS",
+  "name": "Nodysom AI",
   "description": "Universal everyday AI assistant to ask, plan, learn, and do.",
   "requestFramePermissions": [
     "microphone"
