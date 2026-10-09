@@ -169,7 +169,9 @@ function safeJsonParse<T>(value: string): T | null {
   } catch {
     return null;
   }
-}/* =========================================================
+}
+
+/* =========================================================
    AI PROVIDERS — FAST RESPONSE + FALLBACK
 ========================================================= */
 
@@ -705,7 +707,9 @@ app.post("/api/agent", handleAgent);
 app.post(
   ["/api/ai/assistant", "/api/assistant"],
   handleAgent,
-);/* =========================================================
+);
+
+/* =========================================================
    COMMON HELPERS
 ========================================================= */
 
@@ -833,8 +837,72 @@ app.post(
 );
 
 /* =========================================================
-   SEARCH ANSWERS
+   SEARCH ANSWERS — GEMINI GOOGLE SEARCH + FALLBACK
 ========================================================= */
+
+type SearchSource = {
+  title: string;
+  url: string;
+};
+
+function extractSearchSources(
+  response: any,
+): SearchSource[] {
+  const candidates = Array.isArray(
+    response?.candidates,
+  )
+    ? response.candidates
+    : [];
+
+  const sources: SearchSource[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    const chunks = Array.isArray(
+      candidate?.groundingMetadata?.groundingChunks,
+    )
+      ? candidate.groundingMetadata.groundingChunks
+      : [];
+
+    for (const chunk of chunks) {
+      const web = chunk?.web;
+      const url =
+        typeof web?.uri === "string"
+          ? web.uri.trim()
+          : "";
+
+      if (!url) continue;
+
+      try {
+        const parsed = new URL(url);
+
+        if (
+          parsed.protocol !== "https:" &&
+          parsed.protocol !== "http:"
+        ) {
+          continue;
+        }
+
+        if (seen.has(parsed.href)) continue;
+
+        seen.add(parsed.href);
+
+        sources.push({
+          title:
+            typeof web?.title === "string" &&
+            web.title.trim()
+              ? web.title.trim()
+              : parsed.hostname,
+          url: parsed.href,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return sources.slice(0, 10);
+}
 
 async function handleAISearch(
   req: Request,
@@ -845,24 +913,134 @@ async function handleAISearch(
   try {
     const body = req.body || {};
     const query = getRequestText(body);
+    const language = getRequestLanguage(body);
 
     if (!query) {
       return res.status(400).json({
         success: false,
         error: "A search query is required.",
+        summary: "",
+        answer: "",
+        reply: "",
+        sources: [],
       });
     }
 
-    const messages: ChatMessage[] = [
+    const systemInstruction = [
+      "You are Nodysom AI's live web search assistant.",
+      `Respond in ${language}.`,
+      "Use Google Search to find relevant information from the web.",
+      "Prioritize reliable, authoritative and recent sources.",
+      "Answer the user's exact question directly.",
+      "Summarize the key findings clearly.",
+      "When information is time-sensitive, prefer current sources and include dates when available.",
+      "Distinguish confirmed information from uncertainty.",
+      "Do not invent facts, quotations, dates, statistics or URLs.",
+      "If reliable evidence is unavailable, clearly say so.",
+      "Do not claim an action was completed unless it was actually completed.",
+      "Do not include a fabricated source list in the answer.",
+    ].join("\n");
+
+    const apiKey =
+      getEnv("GEMINI_API_KEY") ||
+      getEnv("GOOGLE_API_KEY");
+
+    /*
+     * First choice: Gemini with Google Search grounding.
+     * This is the actual live web-search path.
+     */
+    if (
+      hasValidKey(apiKey) &&
+      Date.now() >= geminiCooldownUntil
+    ) {
+      const ai = new GoogleGenAI({ apiKey });
+
+      try {
+        const response: any = await withTimeout(
+          ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: query,
+                  },
+                ],
+              },
+            ],
+            config: {
+              systemInstruction,
+              tools: [
+                {
+                  googleSearch: {},
+                },
+              ],
+            },
+          } as any),
+          AI_TIMEOUT_MS,
+          "Gemini Google Search",
+        );
+
+        const answer = extractText(response);
+        const sources = extractSearchSources(response);
+
+        if (answer) {
+          return res.status(200).json({
+            success: true,
+            query,
+            summary: answer,
+            answer,
+            reply: answer,
+            text: answer,
+            response: answer,
+            sources,
+            provider: "gemini",
+            model: GEMINI_MODEL,
+            grounded: sources.length > 0,
+            latency: Date.now() - startedAt,
+          });
+        }
+
+        console.warn(
+          "[Nodysom Search] Gemini Google Search returned no answer text.",
+        );
+      } catch (error) {
+        const message = getErrorMessage(error);
+
+        if (
+          /429|quota|rate.?limit|resource.?exhausted/i.test(
+            message,
+          )
+        ) {
+          geminiCooldownUntil =
+            Date.now() + 5 * 60 * 1000;
+        }
+
+        console.error(
+          "[Nodysom Search] Gemini Google Search failed:",
+          message,
+        );
+      }
+    }
+
+    /*
+     * Fallback: keep search available when Gemini Search
+     * is unavailable, while being honest that this response
+     * has not been grounded in live web-search results.
+     */
+    const fallbackMessages: ChatMessage[] = [
       {
         role: "system",
         content: [
           "You are Nodysom AI's search assistant.",
-          `Respond in ${getRequestLanguage(body)}.`,
-          "Answer the user's query directly.",
-          "Separate confirmed information from uncertainty.",
-          "Do not claim you searched the live internet unless a web-search tool was actually used.",
-          "If current information is needed but unavailable, say so clearly.",
+          `Respond in ${language}.`,
+          "Answer the user's query as accurately and directly as possible.",
+          "You do not have live web-search results in this fallback mode.",
+          "Do not claim to have searched the live internet.",
+          "Do not invent sources, links, current events or facts.",
+          "If the answer depends on current information you cannot verify, say so clearly.",
+          "Provide a useful summary when possible.",
         ].join("\n"),
       },
       {
@@ -871,19 +1049,61 @@ async function handleAISearch(
       },
     ];
 
-    const result = await callAI(messages);
+    const result = await callAI(fallbackMessages);
+    const answer = extractText(result.text);
+
+    if (!answer) {
+      return res.status(503).json({
+        success: false,
+        query,
+        error: "No summary was returned. Please try again.",
+        summary: "",
+        answer: "",
+        reply: "",
+        text: "",
+        response: "",
+        sources: [],
+        provider: result.provider,
+        model: result.model,
+        grounded: false,
+        latency: Date.now() - startedAt,
+      });
+    }
 
     return res.status(200).json({
       success: true,
       query,
-      answer: result.text,
-      reply: result.text,
+      summary: answer,
+      answer,
+      reply: answer,
+      text: answer,
+      response: answer,
+      sources: [],
       provider: result.provider,
       model: result.model,
+      grounded: false,
       latency: Date.now() - startedAt,
     });
   } catch (error) {
-    return sendAPIError(res, error);
+    console.error(
+      "[Nodysom Search]",
+      getErrorMessage(error),
+    );
+
+    return res.status(503).json({
+      success: false,
+      error: IS_PRODUCTION
+        ? "Search is temporarily unavailable. Please try again."
+        : getErrorMessage(error),
+      summary: "",
+      answer: "",
+      reply: "",
+      text: "",
+      response: "",
+      sources: [],
+      grounded: false,
+      latency: Date.now() - startedAt,
+    });
   }
 }
 
