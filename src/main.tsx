@@ -2,6 +2,7 @@ import {
   StrictMode,
   lazy,
   Suspense,
+  useEffect,
 } from "react";
 
 import {
@@ -12,18 +13,63 @@ import "./index.css";
 
 
 // =========================================================
+// NODYSOM AI STARTUP PERFORMANCE
+// =========================================================
+//
+// This module keeps the existing application architecture
+// while improving startup monitoring and loading behavior.
+//
+// Goals:
+// - Keep the first loading screen lightweight.
+// - Preserve all existing Nodysom AI functionality.
+// - Preserve every Store route.
+// - Avoid blocking React startup with Service Worker setup.
+// - Measure the time required to mount the application.
+//
+// IMPORTANT:
+// This file does not remove App.tsx or Store features.
+// =========================================================
+
+
+// =========================================================
+// PERFORMANCE MARKS
+// =========================================================
+//
+// These marks help measure startup performance in the
+// browser Performance panel.
+//
+// They do not send user data to an external service.
+// =========================================================
+
+const startupStartedAt =
+  typeof performance !== "undefined"
+    ? performance.now()
+    : 0;
+
+if (
+  typeof performance !== "undefined"
+) {
+  try {
+    performance.mark(
+      "nodysom-startup-start"
+    );
+  } catch {
+    // Performance measurement must never break startup.
+  }
+}
+
+
+// =========================================================
 // LAZY-LOADED MAIN NODYSOM AI APPLICATION
 // =========================================================
 //
-// The main application is loaded only after the route has
-// been checked.
+// App.tsx remains lazy-loaded so Vite can create a separate
+// application chunk when building for production.
 //
-// This helps reduce the amount of JavaScript required during
-// the first startup of Nodysom AI.
+// React loads this component when the main application
+// route is rendered.
 //
-// IMPORTANT:
-// This does NOT remove App.tsx or any of its features.
-// It only changes when App.tsx is downloaded and evaluated.
+// All existing App.tsx features remain available.
 // =========================================================
 
 const App = lazy(
@@ -36,11 +82,13 @@ const App = lazy(
 // LAZY-LOADED STORE COMPONENTS
 // =========================================================
 //
-// These components are loaded only when the user actually
-// visits a /store route. This keeps the main Nodysom AI
-// application lighter and faster on first load.
+// Store components remain separate from the main application
+// bundle where Vite's production build allows this.
 //
-// All existing Store routes remain available.
+// The Store is loaded only when the requested route requires
+// one of these components.
+//
+// Existing Store functionality is preserved.
 // =========================================================
 
 const Storefront = lazy(
@@ -68,8 +116,7 @@ const StoreAdmin = lazy(
 // STORE LOGIN
 // =========================================================
 //
-// Keeps the existing StoreAuth component and route.
-// No Store functionality is removed.
+// Preserves the existing StoreAuth component.
 // =========================================================
 
 function StoreLogin() {
@@ -83,16 +130,16 @@ function StoreLogin() {
 // STORE SETUP
 // =========================================================
 //
-// Keeps the existing StoreSetup flow.
-// After setup completes, the user is redirected to /store.
+// Preserves the existing StoreSetup flow.
+//
+// When setup completes, the user is redirected to /store.
 // =========================================================
 
 function StoreSetupPage() {
   return (
     <StoreSetup
       onComplete={() => {
-        window.location.href =
-          "/store";
+        window.location.href = "/store";
       }}
     />
   );
@@ -100,112 +147,28 @@ function StoreSetupPage() {
 
 
 // =========================================================
-// ROOT ELEMENT
-// =========================================================
-
-const rootElement =
-  document.getElementById(
-    "root"
-  );
-
-if (!rootElement) {
-  throw new Error(
-    "Application root element was not found."
-  );
-}
-
-
-// =========================================================
-// ROUTE DETECTION
+// LIGHTWEIGHT APPLICATION LOADING SCREEN
 // =========================================================
 //
-// Route detection happens before rendering.
+// This screen appears while React downloads and evaluates
+// the lazy-loaded application or Store component.
 //
-// This allows Nodysom AI to decide whether it needs the main
-// application bundle or one of the Store bundles.
-// =========================================================
-
-const path =
-  window.location.pathname;
-
-let page;
-
-
-// =========================================================
-// STORE ROUTES
-// =========================================================
+// Keep this component small to avoid unnecessary work while
+// the browser is waiting for a JavaScript chunk.
 //
-// /store/login
-// /store/setup
-// /store/admin
-// /store/*
-//
-// All existing Store routes are preserved.
-// =========================================================
-
-if (
-  path ===
-  "/store/login"
-) {
-  page =
-    <StoreLogin />;
-
-} else if (
-  path ===
-  "/store/setup"
-) {
-  page =
-    <StoreSetupPage />;
-
-} else if (
-  path ===
-  "/store/admin"
-) {
-  page =
-    <StoreAdmin />;
-
-} else if (
-  path.startsWith(
-    "/store"
-  )
-) {
-  page =
-    <Storefront />;
-
-} else {
-
-  // =======================================================
-  // MAIN NODYSOM AI APPLICATION
-  // =======================================================
-  //
-  // App itself is lazy-loaded.
-  //
-  // This prevents the browser from eagerly downloading
-  // App.tsx and all of its dependencies before the route
-  // decision is complete.
-  // =======================================================
-
-  page =
-    <App />;
-}
-
-
-// =========================================================
-// APPLICATION LOADING FALLBACK
-// =========================================================
-//
-// This fallback is displayed while App.tsx or a Store
-// component is being downloaded.
-//
-// It intentionally remains lightweight so that it appears
-// quickly even on slower mobile connections.
+// The background and text remain compatible with the
+// existing dark Nodysom AI appearance.
 // =========================================================
 
 function LoadingScreen() {
   return (
     <div
+      role="status"
+      aria-live="polite"
+      aria-label="Loading Nodysom AI"
       className="
         min-h-screen
+        min-h-[100dvh]
         bg-slate-950
         text-slate-100
         flex
@@ -213,7 +176,6 @@ function LoadingScreen() {
         justify-center
       "
     >
-
       <div
         className="
           flex
@@ -222,12 +184,10 @@ function LoadingScreen() {
           gap-4
         "
       >
-
-        {/* =================================================
-            LOADING INDICATOR
-            ================================================= */}
+        {/* Lightweight loading indicator */}
 
         <div
+          aria-hidden="true"
           className="
             h-10
             w-10
@@ -239,9 +199,7 @@ function LoadingScreen() {
           "
         />
 
-        {/* =================================================
-            APPLICATION NAME
-            ================================================= */}
+        {/* Application name */}
 
         <div
           className="
@@ -251,10 +209,188 @@ function LoadingScreen() {
         >
           Loading Nodysom AI…
         </div>
-
       </div>
-
     </div>
+  );
+}
+
+
+// =========================================================
+// STARTUP PERFORMANCE MONITOR
+// =========================================================
+//
+// Measures when React has mounted the main application.
+//
+// This records frontend mount timing only. It does not
+// measure Render cold-start time, API response time, or
+// completion of Supabase synchronization.
+// =========================================================
+
+function StartupPerformanceMonitor() {
+  useEffect(() => {
+    if (
+      typeof performance === "undefined"
+    ) {
+      return;
+    }
+
+    try {
+      performance.mark(
+        "nodysom-react-mounted"
+      );
+
+      performance.measure(
+        "nodysom-react-startup",
+        "nodysom-startup-start",
+        "nodysom-react-mounted"
+      );
+
+      const entries =
+        performance.getEntriesByName(
+          "nodysom-react-startup",
+          "measure"
+        );
+
+      const latestEntry =
+        entries.length > 0
+          ? entries[entries.length - 1]
+          : undefined;
+
+      if (latestEntry) {
+        console.info(
+          "[Nodysom AI] React startup:",
+          `${latestEntry.duration.toFixed(1)} ms`
+        );
+      }
+    } catch {
+      // Monitoring errors must not interrupt the application.
+    }
+  }, []);
+
+  return null;
+}
+
+
+// =========================================================
+// ROOT ELEMENT VALIDATION
+// =========================================================
+//
+// Stop with a clear error if index.html does not contain
+// the expected root element.
+// =========================================================
+
+const rootElement =
+  document.getElementById("root");
+
+if (!rootElement) {
+  throw new Error(
+    "Application root element was not found. Check index.html."
+  );
+}
+
+
+// =========================================================
+// ROUTE DETECTION
+// =========================================================
+//
+// Route selection happens before React renders.
+//
+// This preserves the current routing approach and avoids
+// requiring a new routing library.
+//
+// NOTE:
+// The server must still serve index.html for direct requests
+// to these routes.
+// =========================================================
+
+const path =
+  window.location.pathname;
+
+
+// =========================================================
+// SELECT THE REQUESTED PAGE
+// =========================================================
+//
+// Each route continues using the existing component.
+//
+// No Store route is removed.
+// =========================================================
+
+let page;
+
+
+// =========================================================
+// STORE LOGIN ROUTE
+// =========================================================
+//
+// URL: /store/login
+// =========================================================
+
+if (
+  path === "/store/login"
+) {
+  page = (
+    <StoreLogin />
+  );
+
+
+// =========================================================
+// STORE SETUP ROUTE
+// =========================================================
+//
+// URL: /store/setup
+// =========================================================
+
+} else if (
+  path === "/store/setup"
+) {
+  page = (
+    <StoreSetupPage />
+  );
+
+
+// =========================================================
+// STORE ADMIN ROUTE
+// =========================================================
+//
+// URL: /store/admin
+// =========================================================
+
+} else if (
+  path === "/store/admin"
+) {
+  page = (
+    <StoreAdmin />
+  );
+
+
+// =========================================================
+// OTHER STORE ROUTES
+// =========================================================
+//
+// URLs beginning with /store continue opening Storefront.
+// =========================================================
+
+} else if (
+  path.startsWith("/store")
+) {
+  page = (
+    <Storefront />
+  );
+
+
+// =========================================================
+// MAIN NODYSOM AI APPLICATION
+// =========================================================
+//
+// All non-Store routes continue opening App.tsx.
+//
+// The existing main application remains intact.
+// =========================================================
+
+} else {
+  page = (
+    <App />
   );
 }
 
@@ -265,82 +401,172 @@ function LoadingScreen() {
 //
 // StrictMode remains enabled.
 //
-// Suspense handles both:
-// - Nodysom AI lazy loading
-// - Store lazy loading
+// Suspense handles lazy-loaded Nodysom AI and Store chunks.
 //
-// No existing application feature is removed.
+// StartupPerformanceMonitor records React startup timing.
 // =========================================================
 
 createRoot(
   rootElement
 ).render(
   <StrictMode>
+    <StartupPerformanceMonitor />
 
     <Suspense
       fallback={
         <LoadingScreen />
       }
     >
-
       {page}
-
     </Suspense>
-
   </StrictMode>
 );
 
 
 // =========================================================
-// SERVICE WORKER
+// SERVICE WORKER REGISTRATION
 // =========================================================
 //
-// The Service Worker remains enabled.
+// Register the Service Worker after the page load event.
 //
-// It is registered after the window finishes loading so it
-// does not block the initial React application startup.
+// Registration is intentionally kept outside React so it
+// works for both the main application and Store routes.
 //
-// The registration is intentionally kept outside React so
-// it works for both the main application and Store routes.
+// This registration does not itself guarantee that the
+// first page load will be faster. Actual behavior depends
+// on the caching logic implemented in public/sw.js.
+// =========================================================
+
+function registerNodysomServiceWorker() {
+  if (
+    !("serviceWorker" in navigator)
+  ) {
+    return;
+  }
+
+  // Service Workers are intended for secure contexts.
+  // Browsers generally allow localhost during development.
+  if (
+    !window.isSecureContext
+  ) {
+    return;
+  }
+
+  navigator.serviceWorker
+    .register(
+      "/sw.js"
+    )
+    .then(
+      (registration) => {
+        console.info(
+          "[Nodysom AI] Service Worker registered:",
+          registration.scope
+        );
+      }
+    )
+    .catch(
+      (error: unknown) => {
+        console.warn(
+          "[Nodysom AI] Service Worker registration failed:",
+          error
+        );
+      }
+    );
+}
+
+
+// =========================================================
+// NON-BLOCKING SERVICE WORKER STARTUP
+// =========================================================
+//
+// Wait until the browser's load event, then schedule
+// registration during idle time when supported.
+//
+// The fallback ensures older browsers can still register
+// the Service Worker.
+//
+// No application route depends on registration completing.
 // =========================================================
 
 if (
-  "serviceWorker" in
-  navigator
+  document.readyState === "complete"
 ) {
-
+  if (
+    "requestIdleCallback" in window
+  ) {
+    (
+      window as Window & {
+        requestIdleCallback: (
+          callback: IdleRequestCallback,
+          options?: IdleRequestOptions
+        ) => number;
+      }
+    ).requestIdleCallback(
+      () => {
+        registerNodysomServiceWorker();
+      },
+      {
+        timeout: 2500,
+      }
+    );
+  } else {
+    window.setTimeout(
+      registerNodysomServiceWorker,
+      0
+    );
+  }
+} else {
   window.addEventListener(
     "load",
     () => {
-
-      navigator.serviceWorker
-        .register(
-          "/sw.js"
-        )
-        .then(
-          (registration) => {
-
-            console.log(
-              "Nodysom AI Service Worker registered:",
-              registration.scope
-            );
-
+      if (
+        "requestIdleCallback" in window
+      ) {
+        (
+          window as Window & {
+            requestIdleCallback: (
+              callback: IdleRequestCallback,
+              options?: IdleRequestOptions
+            ) => number;
           }
-        )
-        .catch(
-          (error) => {
-
-            console.warn(
-              "Service worker registration failed:",
-              error
-            );
-
+        ).requestIdleCallback(
+          () => {
+            registerNodysomServiceWorker();
+          },
+          {
+            timeout: 2500,
           }
         );
-
+      } else {
+        window.setTimeout(
+          registerNodysomServiceWorker,
+          0
+        );
+      }
     },
     {
       once: true,
     }
+  );
+}
+
+
+// =========================================================
+// STARTUP TIMING INFORMATION
+// =========================================================
+//
+// This timing represents synchronous module startup work.
+// It does not include all network requests or React rendering.
+// =========================================================
+
+if (
+  typeof performance !== "undefined"
+) {
+  const startupDuration =
+    performance.now() - startupStartedAt;
+
+  console.info(
+    "[Nodysom AI] Entry module initialized:",
+    `${startupDuration.toFixed(1)} ms`
   );
 }
