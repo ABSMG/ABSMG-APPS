@@ -488,9 +488,7 @@ function registerNodysomServiceWorker() {
 // No application route depends on registration completing.
 // =========================================================
 
-if (
-  document.readyState === "complete"
-) type NodysomWindow = Window & {
+type NodysomWindow = Window & {
   requestIdleCallback?: (
     callback: IdleRequestCallback,
     options?: IdleRequestOptions
