@@ -9,6 +9,8 @@ import {
   createRoot,
 } from "react-dom/client";
 
+import App from "./App.tsx";
+
 import "./index.css";
 
 
@@ -72,10 +74,7 @@ if (
 // All existing App.tsx features remain available.
 // =========================================================
 
-const App = lazy(
-  () =>
-    import("./App.tsx")
-);
+import App from "./App.tsx";
 
 
 // =========================================================
