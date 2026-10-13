@@ -44,6 +44,7 @@ type VoiceState =
   | 'error';
 
 const START_FEEDBACK_TIMEOUT_MS = 12000;
+const FINAL_TRANSCRIPT_DELAY_MS = 350;
 
 export const VoiceAssistantModal: React.FC<
   VoiceAssistantModalProps
@@ -120,25 +121,81 @@ export const VoiceAssistantModal: React.FC<
   const isSpeakingRef =
     useRef(false);
 
+  const isListeningRef =
+    useRef(false);
+
+  const requestIdRef =
+    useRef(0);
+
+  const mountedRef =
+    useRef(false);
+
+  const voiceFeedbackEnabledRef =
+    useRef(true);
+
+  const onCloseRef =
+    useRef(onClose);
+
+  const onSubmitVoicePromptRef =
+    useRef(onSubmitVoicePrompt);
+
+  // ---------------------------------------------------------
+  // KEEP CALLBACK REFS UP TO DATE
+  // ---------------------------------------------------------
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [
+    onClose,
+  ]);
+
+  useEffect(() => {
+    onSubmitVoicePromptRef.current =
+      onSubmitVoicePrompt;
+  }, [
+    onSubmitVoicePrompt,
+  ]);
+
+  useEffect(() => {
+    voiceFeedbackEnabledRef.current =
+      voiceFeedbackEnabled;
+  }, [
+    voiceFeedbackEnabled,
+  ]);
+
   // ---------------------------------------------------------
   // SYNCHRONIZE REFS WITH STATE
   // ---------------------------------------------------------
 
   useEffect(() => {
     transcriptRef.current = transcript;
-  }, [transcript]);
+  }, [
+    transcript,
+  ]);
 
   useEffect(() => {
     voiceStateRef.current = voiceState;
-  }, [voiceState]);
+  }, [
+    voiceState,
+  ]);
 
   useEffect(() => {
     isProcessingRef.current = isProcessing;
-  }, [isProcessing]);
+  }, [
+    isProcessing,
+  ]);
 
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
-  }, [isSpeaking]);
+  }, [
+    isSpeaking,
+  ]);
+
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [
+    isListening,
+  ]);
 
   // ---------------------------------------------------------
   // TIMER MANAGEMENT
@@ -173,6 +230,7 @@ export const VoiceAssistantModal: React.FC<
   const clearAllTimers =
     useCallback(() => {
       clearFinalTranscriptTimeout();
+
       clearStartFeedbackTimeout();
     }, [
       clearFinalTranscriptTimeout,
@@ -210,7 +268,9 @@ export const VoiceAssistantModal: React.FC<
 
     setIsSpeaking(false);
 
-    if (voiceStateRef.current === 'speaking') {
+    if (
+      voiceStateRef.current === 'speaking'
+    ) {
       updateVoiceState(
         'idle',
         'Spoken response stopped.'
@@ -227,7 +287,9 @@ export const VoiceAssistantModal: React.FC<
   const speakResponse = useCallback(
     (textToSpeak?: string) => {
       const text = (
-        textToSpeak || assistantResponse
+        textToSpeak !== undefined
+          ? textToSpeak
+          : assistantResponse
       ).trim();
 
       if (!text) {
@@ -236,6 +298,10 @@ export const VoiceAssistantModal: React.FC<
           'There is no answer to read aloud yet.'
         );
 
+        return;
+      }
+
+      if (!isMountedOpenRef.current) {
         return;
       }
 
@@ -263,24 +329,61 @@ export const VoiceAssistantModal: React.FC<
         'Nodysom is speaking...'
       );
 
-      speechService.speak(
-        text,
-        preferredLanguage,
-        () => {
-          isSpeakingRef.current = false;
+      const currentRequestId =
+        requestIdRef.current;
 
-          setIsSpeaking(false);
+      try {
+        speechService.speak(
+          text,
+          preferredLanguage,
+          () => {
+            // Ignore callbacks belonging to an old request.
+            if (
+              currentRequestId !== requestIdRef.current
+            ) {
+              return;
+            }
 
-          if (!isMountedOpenRef.current) {
-            return;
+            isSpeakingRef.current = false;
+
+            setIsSpeaking(false);
+
+            if (!isMountedOpenRef.current) {
+              return;
+            }
+
+            updateVoiceState(
+              'idle',
+              'Answer complete. You can ask another question.'
+            );
           }
+        );
+      } catch (error: unknown) {
+        console.error(
+          '[Nodysom Voice Assistant] Text-to-speech failed:',
+          error
+        );
 
-          updateVoiceState(
-            'idle',
-            'Answer complete. You can ask another question.'
-          );
+        isSpeakingRef.current = false;
+
+        setIsSpeaking(false);
+
+        if (!isMountedOpenRef.current) {
+          return;
         }
-      );
+
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to speak the answer on this device.';
+
+        setErrorMessage(message);
+
+        updateVoiceState(
+          'error',
+          'Nodysom could not read the answer aloud.'
+        );
+      }
     },
     [
       assistantResponse,
@@ -304,10 +407,12 @@ export const VoiceAssistantModal: React.FC<
       ).trim();
 
       if (!finalQuery) {
-        updateVoiceState(
-          'idle',
-          'Please speak or enter a request first.'
-        );
+        if (isMountedOpenRef.current) {
+          updateVoiceState(
+            'idle',
+            'Please speak or enter a request first.'
+          );
+        }
 
         return;
       }
@@ -322,6 +427,9 @@ export const VoiceAssistantModal: React.FC<
 
       isSubmittingRef.current = true;
 
+      const currentRequestId =
+        ++requestIdRef.current;
+
       clearAllTimers();
 
       lastSubmittedTranscriptRef.current =
@@ -330,6 +438,8 @@ export const VoiceAssistantModal: React.FC<
       recognitionAttemptRef.current += 1;
 
       speechService.stopListening();
+
+      isListeningRef.current = false;
 
       setIsListening(false);
 
@@ -352,11 +462,16 @@ export const VoiceAssistantModal: React.FC<
 
       try {
         const result =
-          await onSubmitVoicePrompt(
+          await onSubmitVoicePromptRef.current(
             finalQuery
           );
 
-        if (!isMountedOpenRef.current) {
+        // Do not allow a response from an earlier request
+        // to overwrite the current modal state.
+        if (
+          !isMountedOpenRef.current ||
+          currentRequestId !== requestIdRef.current
+        ) {
           return;
         }
 
@@ -387,7 +502,9 @@ export const VoiceAssistantModal: React.FC<
           'Nodysom has answered your question.'
         );
 
-        if (voiceFeedbackEnabled) {
+        if (
+          voiceFeedbackEnabledRef.current
+        ) {
           speakResponse(answer);
         }
       } catch (error: unknown) {
@@ -396,7 +513,10 @@ export const VoiceAssistantModal: React.FC<
           error
         );
 
-        if (!isMountedOpenRef.current) {
+        if (
+          !isMountedOpenRef.current ||
+          currentRequestId !== requestIdRef.current
+        ) {
           return;
         }
 
@@ -412,19 +532,22 @@ export const VoiceAssistantModal: React.FC<
           'Nodysom could not complete your request.'
         );
       } finally {
-        isSubmittingRef.current = false;
+        // Only the current request may reset submission state.
+        if (
+          currentRequestId === requestIdRef.current
+        ) {
+          isSubmittingRef.current = false;
 
-        isProcessingRef.current = false;
+          isProcessingRef.current = false;
 
-        if (isMountedOpenRef.current) {
-          setIsProcessing(false);
+          if (isMountedOpenRef.current) {
+            setIsProcessing(false);
+          }
         }
       }
     },
     [
-      onSubmitVoicePrompt,
       clearAllTimers,
-      voiceFeedbackEnabled,
       speakResponse,
       updateVoiceState,
     ]
@@ -447,6 +570,10 @@ export const VoiceAssistantModal: React.FC<
         return;
       }
 
+      if (!isMountedOpenRef.current) {
+        return;
+      }
+
       if (
         isProcessingRef.current ||
         isSubmittingRef.current
@@ -460,7 +587,7 @@ export const VoiceAssistantModal: React.FC<
       }
 
       if (
-        isListening ||
+        isListeningRef.current ||
         speechService.isCurrentlyListening()
       ) {
         return;
@@ -468,6 +595,7 @@ export const VoiceAssistantModal: React.FC<
 
       clearAllTimers();
 
+      // Stop any previous speech before opening the microphone.
       speechService.stopSpeaking();
 
       isSpeakingRef.current = false;
@@ -486,6 +614,8 @@ export const VoiceAssistantModal: React.FC<
 
       const attempt =
         ++recognitionAttemptRef.current;
+
+      isListeningRef.current = true;
 
       setIsListening(true);
 
@@ -511,6 +641,8 @@ export const VoiceAssistantModal: React.FC<
             voiceStateRef.current === 'starting' &&
             !speechService.isCurrentlyListening()
           ) {
+            isListeningRef.current = false;
+
             setIsListening(false);
 
             setErrorMessage(
@@ -524,165 +656,194 @@ export const VoiceAssistantModal: React.FC<
           }
         }, START_FEEDBACK_TIMEOUT_MS);
 
-      speechService.startListening(
-        {
-          onResult: (
-            text,
-            isFinal
-          ) => {
-            if (
-              !isMountedOpenRef.current ||
-              recognitionAttemptRef.current !== attempt
-            ) {
-              return;
-            }
-
-            const cleanedText =
-              text.trim();
-
-            if (!cleanedText) {
-              return;
-            }
-
-            clearStartFeedbackTimeout();
-
-            transcriptRef.current = cleanedText;
-
-            setTranscript(cleanedText);
-
-            setErrorMessage('');
-
-            if (isFinal) {
+      try {
+        speechService.startListening(
+          {
+            onResult: (
+              text,
+              isFinal
+            ) => {
               if (
-                lastSubmittedTranscriptRef.current ===
-                cleanedText
+                !isMountedOpenRef.current ||
+                recognitionAttemptRef.current !== attempt
               ) {
                 return;
               }
 
-              clearFinalTranscriptTimeout();
+              const cleanedText =
+                text.trim();
 
-              updateVoiceState(
-                'captured',
-                'Speech recognized. Preparing your request...'
-              );
-
-              finalTranscriptTimeoutRef.current =
-                window.setTimeout(() => {
-                  finalTranscriptTimeoutRef.current =
-                    null;
-
-                  if (
-                    !isMountedOpenRef.current ||
-                    recognitionAttemptRef.current !== attempt
-                  ) {
-                    return;
-                  }
-
-                  void submitHandlerRef.current(
-                    cleanedText
-                  );
-                }, 350);
-            } else {
-              updateVoiceState(
-                'listening',
-                'Speech detected. Keep speaking...'
-              );
-            }
-          },
-
-          onError: (error) => {
-            console.error(
-              '[Nodysom Voice Assistant] Speech recognition error:',
-              error
-            );
-
-            if (
-              !isMountedOpenRef.current ||
-              recognitionAttemptRef.current !== attempt
-            ) {
-              return;
-            }
-
-            clearAllTimers();
-
-            setIsListening(false);
-
-            setErrorMessage(error);
-
-            updateVoiceState(
-              'error',
-              'Speech recognition failed. Read the error below and try again.'
-            );
-          },
-
-          onEnd: () => {
-            if (
-              !isMountedOpenRef.current ||
-              recognitionAttemptRef.current !== attempt
-            ) {
-              return;
-            }
-
-            clearStartFeedbackTimeout();
-
-            setIsListening(false);
-
-            if (
-              isProcessingRef.current ||
-              isSubmittingRef.current ||
-              isSpeakingRef.current
-            ) {
-              return;
-            }
-
-            if (transcriptRef.current.trim()) {
-              if (
-                voiceStateRef.current !== 'captured'
-              ) {
-                updateVoiceState(
-                  'captured',
-                  'Speech captured. You can send your request.'
-                );
+              if (!cleanedText) {
+                return;
               }
 
-              return;
-            }
+              clearStartFeedbackTimeout();
 
-            // Preserve a specific recognition error instead
-            // of replacing it with a generic stopped message.
-            if (voiceStateRef.current === 'error') {
-              return;
-            }
+              transcriptRef.current = cleanedText;
 
-            updateVoiceState(
-              'idle',
-              'Listening stopped without recognized words. Tap the microphone and try again.'
-            );
+              setTranscript(cleanedText);
+
+              setErrorMessage('');
+
+              if (isFinal) {
+                if (
+                  lastSubmittedTranscriptRef.current ===
+                  cleanedText
+                ) {
+                  return;
+                }
+
+                clearFinalTranscriptTimeout();
+
+                updateVoiceState(
+                  'captured',
+                  'Speech recognized. Preparing your request...'
+                );
+
+                finalTranscriptTimeoutRef.current =
+                  window.setTimeout(() => {
+                    finalTranscriptTimeoutRef.current =
+                      null;
+
+                    if (
+                      !isMountedOpenRef.current ||
+                      recognitionAttemptRef.current !== attempt
+                    ) {
+                      return;
+                    }
+
+                    void submitHandlerRef.current(
+                      cleanedText
+                    );
+                  }, FINAL_TRANSCRIPT_DELAY_MS);
+              } else {
+                updateVoiceState(
+                  'listening',
+                  'Speech detected. Keep speaking...'
+                );
+              }
+            },
+
+            onError: (error) => {
+              console.error(
+                '[Nodysom Voice Assistant] Speech recognition error:',
+                error
+              );
+
+              if (
+                !isMountedOpenRef.current ||
+                recognitionAttemptRef.current !== attempt
+              ) {
+                return;
+              }
+
+              clearAllTimers();
+
+              isListeningRef.current = false;
+
+              setIsListening(false);
+
+              setErrorMessage(
+                error ||
+                  'Speech recognition failed. Check microphone permission and try again.'
+              );
+
+              updateVoiceState(
+                'error',
+                'Speech recognition failed. Read the error below and try again.'
+              );
+            },
+
+            onEnd: () => {
+              if (
+                !isMountedOpenRef.current ||
+                recognitionAttemptRef.current !== attempt
+              ) {
+                return;
+              }
+
+              clearStartFeedbackTimeout();
+
+              isListeningRef.current = false;
+
+              setIsListening(false);
+
+              if (
+                isProcessingRef.current ||
+                isSubmittingRef.current ||
+                isSpeakingRef.current
+              ) {
+                return;
+              }
+
+              if (transcriptRef.current.trim()) {
+                if (
+                  voiceStateRef.current !== 'captured'
+                ) {
+                  updateVoiceState(
+                    'captured',
+                    'Speech captured. You can send your request.'
+                  );
+                }
+
+                return;
+              }
+
+              // Preserve a specific recognition error instead
+              // of replacing it with a generic stopped message.
+              if (
+                voiceStateRef.current === 'error'
+              ) {
+                return;
+              }
+
+              updateVoiceState(
+                'idle',
+                'Listening stopped without recognized words. Tap the microphone and try again.'
+              );
+            },
           },
-        },
-        preferredLanguage
-      );
+          preferredLanguage
+        );
 
-      // Some failures are reported synchronously by the
-      // service, so check the resulting state immediately.
-      if (!speechService.isSpeechSupported()) {
-        clearStartFeedbackTimeout();
+        // Check support after requesting recognition.
+        if (!speechService.isSpeechSupported()) {
+          clearStartFeedbackTimeout();
+
+          isListeningRef.current = false;
+
+          setIsListening(false);
+
+          setErrorMessage(
+            'Speech recognition is not supported in this browser. Try an up-to-date browser that supports Web Speech API.'
+          );
+
+          updateVoiceState(
+            'error',
+            'Speech recognition is unavailable.'
+          );
+        }
+      } catch (error: unknown) {
+        clearAllTimers();
+
+        isListeningRef.current = false;
 
         setIsListening(false);
 
-        setErrorMessage(
-          'Speech recognition is not supported in this browser. Try an up-to-date browser that supports Web Speech API.'
-        );
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to start speech recognition.';
+
+        setErrorMessage(message);
 
         updateVoiceState(
           'error',
-          'Speech recognition is unavailable.'
+          'Could not start the microphone. Check permissions and try again.'
         );
       }
     }, [
       isOpen,
-      isListening,
       preferredLanguage,
       clearAllTimers,
       clearFinalTranscriptTimeout,
@@ -702,6 +863,8 @@ export const VoiceAssistantModal: React.FC<
       recognitionAttemptRef.current += 1;
 
       speechService.stopListening();
+
+      isListeningRef.current = false;
 
       setIsListening(false);
 
@@ -737,9 +900,13 @@ export const VoiceAssistantModal: React.FC<
 
     recognitionAttemptRef.current += 1;
 
+    requestIdRef.current += 1;
+
     speechService.stopListening();
 
     speechService.stopSpeaking();
+
+    isListeningRef.current = false;
 
     setIsListening(false);
 
@@ -775,6 +942,9 @@ export const VoiceAssistantModal: React.FC<
       setVoiceFeedbackEnabled((enabled) => {
         const nextEnabled = !enabled;
 
+        voiceFeedbackEnabledRef.current =
+          nextEnabled;
+
         if (!nextEnabled) {
           speechService.stopSpeaking();
 
@@ -807,11 +977,15 @@ export const VoiceAssistantModal: React.FC<
 
     recognitionAttemptRef.current += 1;
 
+    requestIdRef.current += 1;
+
     isMountedOpenRef.current = false;
 
     speechService.stopListening();
 
     speechService.stopSpeaking();
+
+    isListeningRef.current = false;
 
     setIsListening(false);
 
@@ -819,10 +993,15 @@ export const VoiceAssistantModal: React.FC<
 
     setIsSpeaking(false);
 
-    onClose();
+    isSubmittingRef.current = false;
+
+    isProcessingRef.current = false;
+
+    setIsProcessing(false);
+
+    onCloseRef.current();
   }, [
     clearAllTimers,
-    onClose,
   ]);
 
   // ---------------------------------------------------------
@@ -830,10 +1009,14 @@ export const VoiceAssistantModal: React.FC<
   // ---------------------------------------------------------
 
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!isOpen) {
       isMountedOpenRef.current = false;
 
-      return;
+      return () => {
+        mountedRef.current = false;
+      };
     }
 
     isMountedOpenRef.current = true;
@@ -844,7 +1027,11 @@ export const VoiceAssistantModal: React.FC<
 
     isSpeakingRef.current = false;
 
+    isListeningRef.current = false;
+
     recognitionAttemptRef.current += 1;
+
+    requestIdRef.current += 1;
 
     lastSubmittedTranscriptRef.current = '';
 
@@ -874,9 +1061,13 @@ export const VoiceAssistantModal: React.FC<
     );
 
     return () => {
+      mountedRef.current = false;
+
       isMountedOpenRef.current = false;
 
       recognitionAttemptRef.current += 1;
+
+      requestIdRef.current += 1;
 
       clearAllTimers();
 
@@ -889,6 +1080,8 @@ export const VoiceAssistantModal: React.FC<
       isProcessingRef.current = false;
 
       isSpeakingRef.current = false;
+
+      isListeningRef.current = false;
     };
   }, [
     isOpen,
@@ -902,6 +1095,13 @@ export const VoiceAssistantModal: React.FC<
 
   const handleQuickPrompt = useCallback(
     (sample: string) => {
+      if (
+        isProcessingRef.current ||
+        isSubmittingRef.current
+      ) {
+        return;
+      }
+
       void submitHandlerRef.current(sample);
     },
     []
