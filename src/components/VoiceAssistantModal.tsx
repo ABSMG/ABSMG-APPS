@@ -126,24 +126,23 @@ export const VoiceAssistantModal: React.FC<
   };
 
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    handleStartListening();
-
-    return () => {
-      speechService.stopListening();
-      speechService.stopSpeaking();
-    };
-  }, [
-    isOpen,
-    handleStartListening,
-  ]);
-
   if (!isOpen) {
-    return null;
+    return;
   }
+
+  setStatusMessage(
+    'Tap the microphone and speak.'
+  );
+
+  return () => {
+    speechService.stopListening();
+    speechService.stopSpeaking();
+  };
+}, [isOpen]);
+
+if (!isOpen) {
+  return null;
+}
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
