@@ -47,6 +47,7 @@ type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
 
 type RecognitionSession = {
   id: number;
+  recognition: SpeechRecognitionInstance;
   handlers: SpeechRecognitionHandlers;
   startConfirmed: boolean;
   resultReceived: boolean;
@@ -59,30 +60,37 @@ type RecognitionSession = {
 
 const RECOGNITION_START_TIMEOUT_MS = 10000;
 const RECOGNITION_NO_RESULT_TIMEOUT_MS = 15000;
+const RECOGNITION_STOP_TIMEOUT_MS = 3000;
 
+/**
+ * Shared browser speech service.
+ *
+ * Each recognition session owns its own SpeechRecognition instance.
+ * This prevents a previous browser session from contaminating a new one.
+ */
 class SpeechService {
+  private recognitionConstructor: SpeechRecognitionConstructor | null = null;
+
   private recognition: SpeechRecognitionInstance | null = null;
 
   private isListening = false;
 
-  private isSpeaking = false;
-
-  // Indicates that the browser has not yet confirmed onstart.
   private isStarting = false;
 
-  // Prevents overlapping recognition.start() requests.
   private startRequestPending = false;
 
-  // Remembers a stop requested before recognition actually starts.
-  private stopRequested = false;
+  private isSpeaking = false;
 
-  // Identifies recognition sessions and protects against stale events.
   private sessionId = 0;
 
-  // Current recognition session.
   private activeSession: RecognitionSession | null = null;
 
-  // Tracks the current text-to-speech operation.
+  /**
+   * If an older recognition instance has not yet emitted onend,
+   * wait for it before allowing another session.
+   */
+  private retiringRecognitions = new Set<SpeechRecognitionInstance>();
+
   private speechSessionId = 0;
 
   constructor() {
@@ -95,37 +103,25 @@ class SpeechService {
       webkitSpeechRecognition?: SpeechRecognitionConstructor;
     };
 
-    const SpeechRecognition =
+    this.recognitionConstructor =
       speechWindow.SpeechRecognition ||
-      speechWindow.webkitSpeechRecognition;
+      speechWindow.webkitSpeechRecognition ||
+      null;
 
-    if (!SpeechRecognition) {
+    if (!this.recognitionConstructor) {
       console.warn(
         "[Nodysom AI] Speech Recognition API is unavailable in this browser."
       );
       return;
     }
 
-    try {
-      this.recognition = new SpeechRecognition();
-
-      this.recognition.continuous = false;
-      this.recognition.interimResults = true;
-      this.recognition.maxAlternatives = 1;
-
-      this.installRecognitionHandlers();
-    } catch (error) {
-      console.error(
-        "[Nodysom AI] Speech recognition initialization failed:",
-        error
-      );
-
-      this.recognition = null;
-    }
+    console.info(
+      "[Nodysom AI] Speech Recognition API detected."
+    );
   }
 
   // ---------------------------------------------------------
-  // INTERNAL RECOGNITION UTILITIES
+  // INTERNAL SESSION UTILITIES
   // ---------------------------------------------------------
 
   private getActiveSession(): RecognitionSession | null {
@@ -136,6 +132,13 @@ class SpeechService {
     }
 
     return session;
+  }
+
+  private isSessionActive(session: RecognitionSession): boolean {
+    return (
+      this.activeSession === session &&
+      this.sessionId === session.id
+    );
   }
 
   private clearSessionWatchdog(
@@ -155,15 +158,132 @@ class SpeechService {
     }
   }
 
-  private clearSessionState(): void {
-    this.clearAllRecognitionTimers();
+  private updatePublicState(): void {
+    const session = this.activeSession;
 
-    this.activeSession = null;
-    this.isListening = false;
-    this.isStarting = false;
-    this.startRequestPending = false;
-    this.stopRequested = false;
+    this.isStarting = Boolean(
+      session && !session.startConfirmed
+    );
+
+    this.isListening = Boolean(
+      session && session.startConfirmed && !session.intentionalStop
+    );
+
+    this.startRequestPending = Boolean(
+      session && !session.startConfirmed
+    );
   }
+
+  private detachRecognitionHandlers(
+    recognition: SpeechRecognitionInstance
+  ): void {
+    recognition.onstart = null;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    recognition.onaudiostart = null;
+    recognition.onaudioend = null;
+    recognition.onsoundstart = null;
+    recognition.onsoundend = null;
+    recognition.onspeechstart = null;
+    recognition.onspeechend = null;
+    recognition.onnomatch = null;
+  }
+
+  private retireRecognition(
+    recognition: SpeechRecognitionInstance
+  ): void {
+    this.retiringRecognitions.add(recognition);
+
+    try {
+      if (typeof recognition.abort === "function") {
+        recognition.abort();
+      } else {
+        recognition.stop();
+      }
+    } catch (error) {
+      console.warn(
+        "[Nodysom AI] Could not retire recognition instance:",
+        error
+      );
+
+      /*
+       * Do not assume the browser has released its recognition
+       * service merely because abort() or stop() threw an error.
+       * Keep the instance marked as retiring until onend arrives.
+       */
+    }
+  }
+
+  private createRecognitionInstance(): SpeechRecognitionInstance {
+    if (!this.recognitionConstructor) {
+      throw new Error(
+        "Speech recognition is not supported in this browser."
+      );
+    }
+
+    const recognition = new this.recognitionConstructor();
+
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    return recognition;
+  }
+
+  private createSession(
+    handlers: SpeechRecognitionHandlers,
+    lang: string
+  ): RecognitionSession {
+    const recognition = this.createRecognitionInstance();
+
+    const session: RecognitionSession = {
+      id: ++this.sessionId,
+      recognition,
+      handlers,
+      startConfirmed: false,
+      resultReceived: false,
+      finalResultReceived: false,
+      intentionalStop: false,
+      errorReported: false,
+      lastTranscript: "",
+      watchdog: null
+    };
+
+    this.activeSession = session;
+    this.recognition = recognition;
+
+    const requestedLanguage =
+      typeof lang === "string" ? lang.trim() : "";
+
+    recognition.lang = requestedLanguage || "en-US";
+
+    this.installRecognitionHandlers(session);
+
+    return session;
+  }
+
+  private clearSessionState(
+    session: RecognitionSession,
+    detachHandlers = false
+  ): void {
+    this.clearSessionWatchdog(session);
+
+    if (detachHandlers) {
+      this.detachRecognitionHandlers(session.recognition);
+    }
+
+    if (this.activeSession === session) {
+      this.activeSession = null;
+      this.recognition = null;
+    }
+
+    this.updatePublicState();
+  }
+
+  // ---------------------------------------------------------
+  // ERROR HANDLING
+  // ---------------------------------------------------------
 
   private mapRecognitionError(error: string): string {
     const normalizedError = error.toLowerCase().trim();
@@ -200,7 +320,10 @@ class SpeechService {
         "The microphone could not complete speech recognition. Check microphone permission and try again.",
 
       "not supported":
-        "Speech recognition is not supported in this browser. Try an up-to-date browser with Web Speech API support."
+        "Speech recognition is not supported in this browser. Try an up-to-date browser with Web Speech API support.",
+
+      "invalidstateerror":
+        "The browser is still using a previous speech-recognition session. Wait a moment, then try again."
     };
 
     return (
@@ -209,24 +332,20 @@ class SpeechService {
     );
   }
 
-  private reportError(
+  private notifyError(
     session: RecognitionSession,
     error: string
   ): void {
-    if (
-      session.errorReported ||
-      this.getActiveSession()?.id !== session.id
-    ) {
+    if (session.errorReported) {
       return;
     }
 
     session.errorReported = true;
 
-    this.clearSessionWatchdog(session);
-
     console.warn(
       "[Nodysom AI] Speech recognition error:",
-      error
+      error,
+      { sessionId: session.id }
     );
 
     try {
@@ -235,32 +354,51 @@ class SpeechService {
       );
     } catch (handlerError) {
       console.error(
-        "[Nodysom AI] Recognition error handler failed:",
+        "[Nodysom AI] Recognition error callback failed:",
         handlerError
       );
     }
   }
 
-  private finishSession(
-    session: RecognitionSession
+  private reportError(
+    session: RecognitionSession,
+    error: string
   ): void {
-    if (this.getActiveSession()?.id !== session.id) {
+    if (!this.isSessionActive(session)) {
       return;
     }
 
     this.clearSessionWatchdog(session);
+    this.notifyError(session, error);
+  }
 
-    this.activeSession = null;
-    this.isListening = false;
-    this.isStarting = false;
-    this.startRequestPending = false;
-    this.stopRequested = false;
+  // ---------------------------------------------------------
+  // SESSION FINISHING AND WATCHDOGS
+  // ---------------------------------------------------------
+
+  private finishSession(
+    session: RecognitionSession
+  ): void {
+    if (!this.isSessionActive(session)) {
+      return;
+    }
+
+    console.info(
+      "[Nodysom AI] Recognition session finished.",
+      {
+        sessionId: session.id,
+        receivedResult: session.resultReceived,
+        receivedFinalResult: session.finalResultReceived
+      }
+    );
+
+    this.clearSessionState(session, true);
 
     try {
       session.handlers.onEnd();
     } catch (error) {
       console.error(
-        "[Nodysom AI] Recognition end handler failed:",
+        "[Nodysom AI] Recognition end callback failed:",
         error
       );
     }
@@ -274,7 +412,7 @@ class SpeechService {
     this.clearSessionWatchdog(session);
 
     session.watchdog = setTimeout(() => {
-      if (this.getActiveSession()?.id !== session.id) {
+      if (!this.isSessionActive(session)) {
         return;
       }
 
@@ -283,75 +421,64 @@ class SpeechService {
       }
 
       console.warn(
-        "[Nodysom AI] Recognition watchdog triggered:",
-        message
+        "[Nodysom AI] Recognition watchdog triggered.",
+        {
+          sessionId: session.id,
+          timeoutMs,
+          message
+        }
       );
 
       this.reportError(session, message);
 
-      const recognition = this.recognition;
+      /*
+       * End the UI session immediately, but keep the old
+       * recognition instance retiring until the browser releases it.
+       * A new session must not overlap this one.
+       */
+      this.clearSessionState(session);
 
-      if (recognition) {
-        try {
-          if (typeof recognition.abort === "function") {
-            recognition.abort();
-          } else {
-            recognition.stop();
-          }
-        } catch (error) {
-          console.warn(
-            "[Nodysom AI] Could not stop timed-out recognition:",
-            error
-          );
-        }
+      this.retireRecognition(session.recognition);
+
+      try {
+        session.handlers.onEnd();
+      } catch (error) {
+        console.error(
+          "[Nodysom AI] Recognition timeout end callback failed:",
+          error
+        );
       }
-
-      // Do not depend solely on the browser firing onend.
-      // A broken recognition implementation must not leave
-      // the UI stuck forever.
-      this.finishSession(session);
     }, timeoutMs);
   }
 
-  private installRecognitionHandlers(): void {
-    const recognition = this.recognition;
-
-    if (!recognition) {
-      return;
-    }
+  private installRecognitionHandlers(
+    session: RecognitionSession
+  ): void {
+    const recognition = session.recognition;
 
     recognition.onstart = () => {
-      const session = this.getActiveSession();
-
-      if (!session) {
-        try {
-          recognition.abort?.();
-        } catch {
-          // Ignore stale-session cleanup failures.
-        }
+      if (!this.isSessionActive(session)) {
+        console.info(
+          "[Nodysom AI] Ignoring start event from a stale session.",
+          { sessionId: session.id }
+        );
 
         return;
       }
 
       session.startConfirmed = true;
-
-      this.isStarting = false;
-      this.startRequestPending = false;
-      this.isListening = true;
+      this.updatePublicState();
 
       console.info(
         "[Nodysom AI] Speech recognition started.",
-        { sessionId: session.id }
+        { sessionId: session.id, lang: recognition.lang }
       );
 
-      if (this.stopRequested || session.intentionalStop) {
-        this.stopRequested = false;
+      if (session.intentionalStop) {
         this.stopListening();
         return;
       }
 
-      // If no result or recognition error arrives, report a
-      // useful timeout rather than leaving the UI in Listening.
       this.startWatchdog(
         session,
         RECOGNITION_NO_RESULT_TIMEOUT_MS,
@@ -360,65 +487,77 @@ class SpeechService {
     };
 
     recognition.onaudiostart = () => {
-      const session = this.getActiveSession();
-
-      if (!session) {
+      if (!this.isSessionActive(session)) {
         return;
       }
 
       console.info(
-        "[Nodysom AI] Microphone audio capture started."
+        "[Nodysom AI] Microphone audio capture started.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onaudioend = () => {
       console.info(
-        "[Nodysom AI] Microphone audio capture ended."
+        "[Nodysom AI] Microphone audio capture ended.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onsoundstart = () => {
+      if (!this.isSessionActive(session)) {
+        return;
+      }
+
       console.info(
-        "[Nodysom AI] Sound detected by speech recognition."
+        "[Nodysom AI] Sound detected.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onsoundend = () => {
       console.info(
-        "[Nodysom AI] Sound activity ended."
+        "[Nodysom AI] Sound activity ended.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onspeechstart = () => {
+      if (!this.isSessionActive(session)) {
+        return;
+      }
+
       console.info(
-        "[Nodysom AI] Speech activity detected."
+        "[Nodysom AI] Speech activity detected.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onspeechend = () => {
       console.info(
-        "[Nodysom AI] Speech activity ended."
+        "[Nodysom AI] Speech activity ended.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onnomatch = () => {
-      const session = this.getActiveSession();
-
-      if (!session || session.intentionalStop) {
+      if (!this.isSessionActive(session)) {
         return;
       }
 
       console.warn(
-        "[Nodysom AI] Speech was detected, but no matching transcript was returned."
+        "[Nodysom AI] Speech was detected, but no matching transcript was returned.",
+        { sessionId: session.id }
       );
     };
 
     recognition.onresult = (
       event: SpeechRecognitionResultEvent
     ) => {
-      const session = this.getActiveSession();
-
-      if (!session || session.intentionalStop) {
+      if (
+        !this.isSessionActive(session) ||
+        session.intentionalStop
+      ) {
         return;
       }
 
@@ -461,22 +600,20 @@ class SpeechService {
         session.finalResultReceived = true;
       }
 
-      // Speech recognition is producing data. Give it a fresh
-      // window if more speech results are still arriving.
-      this.startWatchdog(
-        session,
-        RECOGNITION_NO_RESULT_TIMEOUT_MS,
-        "Speech recognition stopped producing results. Tap the microphone and try again."
-      );
-
       console.info(
-        "[Nodysom AI] Transcript received:",
+        "[Nodysom AI] Transcript received.",
         {
+          sessionId: session.id,
           transcript,
           isFinal: Boolean(finalTranscript.trim())
         }
       );
 
+      /*
+       * Send the transcript to the component before changing
+       * the session lifecycle. This preserves the existing
+       * interim/final transcript behavior.
+       */
       try {
         session.handlers.onResult(
           transcript,
@@ -484,7 +621,7 @@ class SpeechService {
         );
       } catch (error) {
         console.error(
-          "[Nodysom AI] Transcript handler failed:",
+          "[Nodysom AI] Transcript callback failed:",
           error
         );
 
@@ -492,69 +629,79 @@ class SpeechService {
           session,
           "The application could not process the recognized transcript."
         );
+
+        return;
       }
 
       if (session.finalResultReceived) {
         this.clearSessionWatchdog(session);
+      } else {
+        this.startWatchdog(
+          session,
+          RECOGNITION_NO_RESULT_TIMEOUT_MS,
+          "Speech recognition stopped producing results. Tap the microphone and try again."
+        );
       }
     };
 
     recognition.onerror = (
       event: SpeechRecognitionErrorEvent
     ) => {
-      const session = this.getActiveSession();
-
       const error =
         event.error ||
         event.message ||
         "Microphone error";
 
-      this.isListening = false;
-      this.isStarting = false;
-      this.startRequestPending = false;
-      this.stopRequested = false;
+      console.warn(
+        "[Nodysom AI] Browser recognition error event.",
+        {
+          sessionId: session.id,
+          error
+        }
+      );
 
-      // A user-requested abort is not necessarily a failure.
+      if (!this.isSessionActive(session)) {
+        return;
+      }
+
+      this.clearSessionWatchdog(session);
+
+      /*
+       * Do not clear intentionalStop before checking it.
+       * Some browsers emit "aborted" after a user-requested stop.
+       */
       if (
-        (error === "aborted" || error === "no-speech") &&
-        session?.intentionalStop
+        session.intentionalStop &&
+        (error === "aborted" || error === "no-speech")
       ) {
         return;
       }
 
-      if (session) {
-        this.reportError(session, error);
-      } else {
-        console.warn(
-          "[Nodysom AI] Recognition error without an active session:",
-          error
-        );
-      }
+      this.notifyError(session, error);
     };
 
     recognition.onend = () => {
-      const session = this.getActiveSession();
-
       console.info(
-        "[Nodysom AI] Speech recognition session ended."
+        "[Nodysom AI] Browser recognition onend event.",
+        { sessionId: session.id }
       );
 
-      if (!session) {
-        this.isListening = false;
-        this.isStarting = false;
-        this.startRequestPending = false;
-        this.stopRequested = false;
+      this.retiringRecognitions.delete(recognition);
+
+      if (!this.isSessionActive(session)) {
+        /*
+         * This was an old or cancelled session. It may now be
+         * safely removed from the retiring list.
+         */
         return;
       }
 
-      // A normal onend without any result or error is not a
-      // successful transcription. Tell the UI what happened.
       if (
         !session.intentionalStop &&
         !session.resultReceived &&
         !session.errorReported
       ) {
-        this.reportError(
+        this.notifyError(
           session,
           "Speech recognition ended without returning any words. Check the browser speech service, microphone access and internet connection."
         );
@@ -569,7 +716,7 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public isSpeechSupported(): boolean {
-    return Boolean(this.recognition);
+    return this.recognitionConstructor !== null;
   }
 
   public isCurrentlyListening(): boolean {
@@ -613,7 +760,7 @@ class SpeechService {
       return;
     }
 
-    if (!this.recognition) {
+    if (!this.recognitionConstructor) {
       handlers.onError(
         "Speech recognition is not supported in this browser. Use an up-to-date browser with Web Speech API support."
       );
@@ -622,70 +769,78 @@ class SpeechService {
       return;
     }
 
-    // Prevent multiple simultaneous sessions.
+    /*
+     * Do not start another session while one is active or while
+     * an older browser recognition instance is still being released.
+     */
     if (
+      this.activeSession !== null ||
       this.isListening ||
       this.isStarting ||
       this.startRequestPending ||
-      this.activeSession !== null
+      this.retiringRecognitions.size > 0
     ) {
       console.warn(
-        "[Nodysom AI] Ignoring duplicate recognition start request."
+        "[Nodysom AI] Duplicate or overlapping recognition start rejected.",
+        {
+          activeSession: this.activeSession?.id ?? null,
+          retiringSessions: this.retiringRecognitions.size,
+          isListening: this.isListening,
+          isStarting: this.isStarting
+        }
       );
+
+      handlers.onError(
+        "Speech recognition is still finishing the previous session. Wait a moment, then tap the microphone again."
+      );
+
+      handlers.onEnd();
       return;
     }
 
-    const recognition = this.recognition;
-
-    this.sessionId += 1;
-
-    const session: RecognitionSession = {
-      id: this.sessionId,
-      handlers,
-      startConfirmed: false,
-      resultReceived: false,
-      finalResultReceived: false,
-      intentionalStop: false,
-      errorReported: false,
-      lastTranscript: "",
-      watchdog: null
-    };
-
-    this.activeSession = session;
-
-    this.stopRequested = false;
-    this.startRequestPending = true;
-    this.isStarting = true;
-    this.isListening = false;
+    let session: RecognitionSession;
 
     try {
-      const requestedLanguage =
-        typeof lang === "string"
-          ? lang.trim()
-          : "";
+      session = this.createSession(handlers, lang);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not initialize speech recognition.";
 
-      recognition.lang =
-        requestedLanguage || "en-US";
+      console.error(
+        "[Nodysom AI] Recognition session creation failed:",
+        error
+      );
 
-      // A browser must confirm onstart before the session is
-      // considered to be actively listening.
-      recognition.start();
+      handlers.onError(this.mapRecognitionError(message));
+      handlers.onEnd();
+      return;
+    }
 
-      // Do not leave "starting" stuck if the browser never
-      // sends onstart or onerror.
+    this.updatePublicState();
+
+    console.info(
+      "[Nodysom AI] Requesting speech recognition start.",
+      {
+        sessionId: session.id,
+        language: session.recognition.lang
+      }
+    );
+
+    try {
+      /*
+       * Call start() synchronously from the user's microphone
+       * click handler so browsers can honor the user gesture.
+       */
+      session.recognition.start();
+
       this.startWatchdog(
         session,
         RECOGNITION_START_TIMEOUT_MS,
         "The browser did not start speech recognition within 10 seconds. Check microphone permission and browser compatibility."
       );
     } catch (error: unknown) {
-      this.clearSessionWatchdog(session);
-
-      this.isListening = false;
-      this.isStarting = false;
-      this.startRequestPending = false;
-      this.stopRequested = false;
-
       const errorName =
         error instanceof Error
           ? error.name
@@ -694,33 +849,75 @@ class SpeechService {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : "Could not start microphone";
+          : "Could not start microphone.";
 
       console.error(
-        "[Nodysom AI] Could not start speech recognition:",
-        { errorName, errorMessage }
+        "[Nodysom AI] Recognition start() failed.",
+        {
+          sessionId: session.id,
+          errorName,
+          errorMessage
+        }
       );
 
+      this.clearSessionWatchdog(session);
+
+      /*
+       * InvalidStateError can mean the browser's underlying speech
+       * service is still busy. Retire this recognizer instead of
+       * reusing it immediately.
+       */
       if (errorName === "InvalidStateError") {
-        this.activeSession = null;
+        this.clearSessionState(session);
 
-        handlers.onError(
-          "The browser reports that speech recognition is already running. Wait a moment, then tap the microphone again."
-        );
+        this.retireRecognition(session.recognition);
 
-        handlers.onEnd();
+        try {
+          handlers.onError(
+            "The browser is still using its speech-recognition service. Wait a moment, then tap the microphone again."
+          );
+        } catch (handlerError) {
+          console.error(
+            "[Nodysom AI] Error callback failed:",
+            handlerError
+          );
+        }
+
+        try {
+          handlers.onEnd();
+        } catch (handlerError) {
+          console.error(
+            "[Nodysom AI] End callback failed:",
+            handlerError
+          );
+        }
+
         return;
       }
 
-      this.activeSession = null;
+      this.clearSessionState(session, true);
 
-      handlers.onError(
-        this.mapRecognitionError(
-          errorName || errorMessage
-        )
-      );
+      try {
+        handlers.onError(
+          this.mapRecognitionError(
+            errorName || errorMessage
+          )
+        );
+      } catch (handlerError) {
+        console.error(
+          "[Nodysom AI] Error callback failed:",
+          handlerError
+        );
+      }
 
-      handlers.onEnd();
+      try {
+        handlers.onEnd();
+      } catch (handlerError) {
+        console.error(
+          "[Nodysom AI] End callback failed:",
+          handlerError
+        );
+      }
     }
   }
 
@@ -729,67 +926,108 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public stopListening(): void {
-    const recognition = this.recognition;
     const session = this.getActiveSession();
 
-    if (!recognition || !session) {
-      this.clearSessionState();
+    if (!session) {
+      this.isListening = false;
+      this.isStarting = false;
+      this.startRequestPending = false;
       return;
     }
 
-    if (
-      !this.isListening &&
-      !this.isStarting &&
-      !this.startRequestPending
-    ) {
-      this.finishSession(session);
+    if (session.intentionalStop) {
       return;
     }
 
     session.intentionalStop = true;
-    this.stopRequested = true;
 
     this.clearSessionWatchdog(session);
+    this.updatePublicState();
+
+    console.info(
+      "[Nodysom AI] User or application requested recognition stop.",
+      { sessionId: session.id }
+    );
 
     try {
-      recognition.stop();
+      session.recognition.stop();
     } catch (error: unknown) {
       const errorName =
         error instanceof Error
           ? error.name
           : "";
 
-      if (errorName === "InvalidStateError") {
-        this.finishSession(session);
-        return;
-      }
-
       console.warn(
-        "[Nodysom AI] Could not stop speech recognition:",
+        "[Nodysom AI] recognition.stop() failed:",
         error
       );
 
-      this.finishSession(session);
+      if (errorName === "InvalidStateError") {
+        /*
+         * Do not call finishSession immediately and then start a new
+         * session on the assumption that the browser is ready.
+         * Retire this recognizer and wait for its onend event.
+         */
+        this.clearSessionState(session);
+
+        this.retireRecognition(session.recognition);
+
+        try {
+          session.handlers.onEnd();
+        } catch (handlerError) {
+          console.error(
+            "[Nodysom AI] Recognition end callback failed:",
+            handlerError
+          );
+        }
+
+        return;
+      }
+
+      this.clearSessionState(session);
+
+      this.retireRecognition(session.recognition);
+
+      try {
+        session.handlers.onEnd();
+      } catch (handlerError) {
+        console.error(
+          "[Nodysom AI] Recognition end callback failed:",
+          handlerError
+        );
+      }
+
       return;
     }
 
-    this.isListening = false;
-    this.isStarting = false;
-    this.startRequestPending = false;
-
-    // Some browser implementations fail to fire onend after
-    // stop(). Finish safely instead of leaving a stale session.
+    /*
+     * Some implementations do not fire onend after stop().
+     * Finish the UI session after a short grace period but continue
+     * tracking the recognizer until its actual onend event arrives.
+     */
     session.watchdog = setTimeout(() => {
-      if (this.getActiveSession()?.id !== session.id) {
+      if (!this.isSessionActive(session)) {
         return;
       }
 
       console.warn(
-        "[Nodysom AI] Recognition did not finish after stop()."
+        "[Nodysom AI] Recognition did not end after stop(); retiring session.",
+        { sessionId: session.id }
       );
 
-      this.finishSession(session);
-    }, 3000);
+      this.clearSessionState(session);
+
+      this.retireRecognition(session.recognition);
+
+      try {
+        session.handlers.onEnd();
+      } catch (error) {
+        console.error(
+          "[Nodysom AI] Recognition end callback failed:",
+          error
+        );
+      }
+    }, RECOGNITION_STOP_TIMEOUT_MS);
   }
 
   // ---------------------------------------------------------
@@ -797,26 +1035,40 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public abortListening(): void {
-    const recognition = this.recognition;
+    const session = this.activeSession;
 
-    // Invalidate callbacks from the session being cancelled.
-    this.sessionId += 1;
-
-    this.clearSessionState();
-
-    if (!recognition) {
+    if (!session) {
+      this.isListening = false;
+      this.isStarting = false;
+      this.startRequestPending = false;
       return;
     }
 
+    console.info(
+      "[Nodysom AI] Aborting recognition session.",
+      { sessionId: session.id }
+    );
+
+    this.clearSessionWatchdog(session);
+
+    /*
+     * Invalidate the session so late events cannot alter the UI.
+     */
+    this.sessionId += 1;
+    this.activeSession = null;
+    this.recognition = null;
+
+    this.isListening = false;
+    this.isStarting = false;
+    this.startRequestPending = false;
+
+    this.retireRecognition(session.recognition);
+
     try {
-      if (typeof recognition.abort === "function") {
-        recognition.abort();
-      } else {
-        recognition.stop();
-      }
+      session.handlers.onEnd();
     } catch (error) {
-      console.warn(
-        "[Nodysom AI] Could not abort speech recognition:",
+      console.error(
+        "[Nodysom AI] Recognition cancellation callback failed:",
         error
       );
     }
@@ -855,15 +1107,11 @@ class SpeechService {
 
     this.stopSpeaking();
 
-    const currentSpeechSessionId =
-      this.speechSessionId;
+    const currentSpeechSessionId = this.speechSessionId;
 
-    const utterance =
-      new SpeechSynthesisUtterance(cleanText);
+    const utterance = new SpeechSynthesisUtterance(cleanText);
 
-    utterance.lang =
-      lang.trim() || "en-US";
-
+    utterance.lang = lang.trim() || "en-US";
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
 
@@ -923,7 +1171,9 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public stopSpeaking(): void {
-    // Invalidate callbacks from the previous speech session.
+    /*
+     * Invalidate callbacks from the previous speech operation.
+     */
     this.speechSessionId += 1;
 
     if (!this.isTTSSupported()) {
