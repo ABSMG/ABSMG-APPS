@@ -3949,17 +3949,17 @@ export default function App() {
           }
 
           onSubmitVoicePrompt={(
-            prompt
-          ) => {
+  prompt
+) => {
 
-            setCurrentTab(
-              'home'
-            );
+  setCurrentTab(
+    'home'
+  );
 
-            handleSendMessage(
-              prompt
-            );
-          }}
+  return handleSendMessage(
+    prompt
+  );
+}}
 
           preferredLanguage={
             user.preferredLanguage
