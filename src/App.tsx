@@ -2387,19 +2387,19 @@ export default function App() {
   // =========================================================
 
   const handleSendMessage =
-    async (
-      text: string
-    ) => {
+  async (
+    text: string
+  ): Promise<string | null> => {
 
       const cleanText =
         text.trim();
 
       if (
-        !cleanText ||
-        isLoadingAI
-      ) {
-        return;
-      }
+  !cleanText ||
+  isLoadingAI
+) {
+  return null;
+}
 
       const now =
         Date.now();
@@ -2687,12 +2687,14 @@ export default function App() {
               data.toolResult
             );
           }
+        
         }
+
+        return agentReply;
 
       } catch (
         error: any
       ) {
-
         console.error(
           'Nodysom AI Agent error:',
           error
@@ -2762,12 +2764,14 @@ export default function App() {
           errorHistory
         );
 
+        
         Storage.saveChatHistory(
           errorHistory
         );
 
-      } finally {
+        return errorText;
 
+      } finally {
         window.clearTimeout(
           timeoutId
         );
