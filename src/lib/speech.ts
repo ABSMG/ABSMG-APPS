@@ -62,6 +62,7 @@ const RECOGNITION_START_TIMEOUT_MS = 10000;
 const RECOGNITION_NO_RESULT_TIMEOUT_MS = 15000;
 const RECOGNITION_STOP_TIMEOUT_MS = 3000;
 const RETIRING_RECOGNITION_TIMEOUT_MS = 5000;
+const RECOGNITION_ERROR_CLEANUP_TIMEOUT_MS = 2000;
 
 class SpeechService {
   private recognitionConstructor: SpeechRecognitionConstructor | null = null;
@@ -82,8 +83,7 @@ class SpeechService {
 
   /**
    * Tracks old recognition instances that are being stopped.
-   * This is diagnostic state only; it must not permanently block
-   * a new recognition session.
+   * Retiring instances never permanently block new sessions.
    */
   private retiringRecognitions = new Set<SpeechRecognitionInstance>();
 
@@ -116,9 +116,7 @@ class SpeechService {
       return;
     }
 
-    console.info(
-      "[Nodysom AI] Speech Recognition API detected."
-    );
+    console.info("[Nodysom AI] Speech Recognition API detected.");
   }
 
   // ---------------------------------------------------------
@@ -142,9 +140,7 @@ class SpeechService {
     );
   }
 
-  private clearSessionWatchdog(
-    session: RecognitionSession
-  ): void {
+  private clearSessionWatchdog(session: RecognitionSession): void {
     if (session.watchdog !== null) {
       clearTimeout(session.watchdog);
       session.watchdog = null;
@@ -224,12 +220,9 @@ class SpeechService {
     this.retiringRecognitions.add(recognition);
 
     /*
-     * Do not retain a stale recognition instance forever if the
-     * browser fails to dispatch onend.
-     *
-     * This timer only releases our internal tracking. It cannot
-     * guarantee that the browser's underlying speech service has
-     * actually stopped.
+     * Internal tracking is released after a timeout if the browser
+     * does not dispatch onend. This does not guarantee that the
+     * underlying browser speech service has stopped.
      */
     this.clearRetirementTimer(recognition);
 
@@ -320,6 +313,39 @@ class SpeechService {
     }
 
     this.updatePublicState();
+  }
+
+  private safelyCallOnEnd(
+    session: RecognitionSession
+  ): void {
+    try {
+      session.handlers.onEnd();
+    } catch (error) {
+      console.error(
+        "[Nodysom AI] Recognition end callback failed:",
+        error
+      );
+    }
+  }
+
+  private finishSession(
+    session: RecognitionSession
+  ): void {
+    if (!this.isSessionActive(session)) {
+      return;
+    }
+
+    console.info(
+      "[Nodysom AI] Recognition session finished.",
+      {
+        sessionId: session.id,
+        receivedResult: session.resultReceived,
+        receivedFinalResult: session.finalResultReceived
+      }
+    );
+
+    this.clearSessionState(session, true);
+    this.safelyCallOnEnd(session);
   }
 
   // ---------------------------------------------------------
@@ -414,36 +440,8 @@ class SpeechService {
   }
 
   // ---------------------------------------------------------
-  // SESSION FINISHING AND WATCHDOGS
+  // SESSION WATCHDOGS
   // ---------------------------------------------------------
-
-  private finishSession(
-    session: RecognitionSession
-  ): void {
-    if (!this.isSessionActive(session)) {
-      return;
-    }
-
-    console.info(
-      "[Nodysom AI] Recognition session finished.",
-      {
-        sessionId: session.id,
-        receivedResult: session.resultReceived,
-        receivedFinalResult: session.finalResultReceived
-      }
-    );
-
-    this.clearSessionState(session, true);
-
-    try {
-      session.handlers.onEnd();
-    } catch (error) {
-      console.error(
-        "[Nodysom AI] Recognition end callback failed:",
-        error
-      );
-    }
-  }
 
   private startWatchdog(
     session: RecognitionSession,
@@ -472,23 +470,11 @@ class SpeechService {
 
       this.reportError(session, message);
 
-      /*
-       * Finish the UI session so it does not remain stuck.
-       * Track the old instance only temporarily because some browsers
-       * do not send onend reliably.
-       */
       this.clearSessionState(session);
 
       this.retireRecognition(session.recognition);
 
-      try {
-        session.handlers.onEnd();
-      } catch (error) {
-        console.error(
-          "[Nodysom AI] Recognition timeout end callback failed:",
-          error
-        );
-      }
+      this.safelyCallOnEnd(session);
     }, timeoutMs);
   }
 
@@ -713,6 +699,32 @@ class SpeechService {
       }
 
       this.notifyError(session, error);
+
+      /*
+       * Some browsers and Android WebViews report an error
+       * without dispatching onend. Use a bounded cleanup timer.
+       *
+       * If onend arrives normally, finishSession() clears it.
+       */
+      session.watchdog = setTimeout(() => {
+        if (!this.isSessionActive(session)) {
+          return;
+        }
+
+        console.warn(
+          "[Nodysom AI] Recognition error was not followed by onend. Forcing cleanup.",
+          {
+            sessionId: session.id,
+            error
+          }
+        );
+
+        this.clearSessionState(session);
+
+        this.retireRecognition(session.recognition);
+
+        this.safelyCallOnEnd(session);
+      }, RECOGNITION_ERROR_CLEANUP_TIMEOUT_MS);
     };
 
     recognition.onend = () => {
@@ -802,14 +814,7 @@ class SpeechService {
 
     /*
      * Prevent duplicate sessions that are actually active.
-     *
-     * IMPORTANT:
-     * retiringRecognitions.size is intentionally NOT used as a
-     * permanent start blocker. An old recognition instance may fail
-     * to send onend, which would otherwise disable the microphone.
-     *
-     * The browser can still reject start() with InvalidStateError.
-     * That error is handled below.
+     * Retiring instances do not permanently block a new session.
      */
     if (
       this.activeSession !== null ||
@@ -994,32 +999,14 @@ class SpeechService {
         this.clearSessionState(session);
 
         this.retireRecognition(session.recognition);
-
-        try {
-          session.handlers.onEnd();
-        } catch (handlerError) {
-          console.error(
-            "[Nodysom AI] Recognition end callback failed:",
-            handlerError
-          );
-        }
-
+        this.safelyCallOnEnd(session);
         return;
       }
 
       this.clearSessionState(session);
 
       this.retireRecognition(session.recognition);
-
-      try {
-        session.handlers.onEnd();
-      } catch (handlerError) {
-        console.error(
-          "[Nodysom AI] Recognition end callback failed:",
-          handlerError
-        );
-      }
-
+      this.safelyCallOnEnd(session);
       return;
     }
 
@@ -1036,15 +1023,7 @@ class SpeechService {
       this.clearSessionState(session);
 
       this.retireRecognition(session.recognition);
-
-      try {
-        session.handlers.onEnd();
-      } catch (error) {
-        console.error(
-          "[Nodysom AI] Recognition end callback failed:",
-          error
-        );
-      }
+      this.safelyCallOnEnd(session);
     }, RECOGNITION_STOP_TIMEOUT_MS);
   }
 
@@ -1081,15 +1060,7 @@ class SpeechService {
     this.startRequestPending = false;
 
     this.retireRecognition(session.recognition);
-
-    try {
-      session.handlers.onEnd();
-    } catch (error) {
-      console.error(
-        "[Nodysom AI] Recognition cancellation callback failed:",
-        error
-      );
-    }
+    this.safelyCallOnEnd(session);
   }
 
   // ---------------------------------------------------------
@@ -1129,7 +1100,11 @@ class SpeechService {
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
 
-    utterance.lang = lang.trim() || "en-US";
+    utterance.lang =
+      typeof lang === "string" && lang.trim()
+        ? lang.trim()
+        : "en-US";
+
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
 
