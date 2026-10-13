@@ -61,13 +61,8 @@ type RecognitionSession = {
 const RECOGNITION_START_TIMEOUT_MS = 10000;
 const RECOGNITION_NO_RESULT_TIMEOUT_MS = 15000;
 const RECOGNITION_STOP_TIMEOUT_MS = 3000;
+const RETIRING_RECOGNITION_TIMEOUT_MS = 5000;
 
-/**
- * Shared browser speech service.
- *
- * Each recognition session owns its own SpeechRecognition instance.
- * This prevents a previous browser session from contaminating a new one.
- */
 class SpeechService {
   private recognitionConstructor: SpeechRecognitionConstructor | null = null;
 
@@ -86,10 +81,16 @@ class SpeechService {
   private activeSession: RecognitionSession | null = null;
 
   /**
-   * If an older recognition instance has not yet emitted onend,
-   * wait for it before allowing another session.
+   * Tracks old recognition instances that are being stopped.
+   * This is diagnostic state only; it must not permanently block
+   * a new recognition session.
    */
   private retiringRecognitions = new Set<SpeechRecognitionInstance>();
+
+  private retirementTimers = new Map<
+    SpeechRecognitionInstance,
+    ReturnType<typeof setTimeout>
+  >();
 
   private speechSessionId = 0;
 
@@ -166,7 +167,9 @@ class SpeechService {
     );
 
     this.isListening = Boolean(
-      session && session.startConfirmed && !session.intentionalStop
+      session &&
+      session.startConfirmed &&
+      !session.intentionalStop
     );
 
     this.startRequestPending = Boolean(
@@ -190,10 +193,54 @@ class SpeechService {
     recognition.onnomatch = null;
   }
 
+  private clearRetirementTimer(
+    recognition: SpeechRecognitionInstance
+  ): void {
+    const timer = this.retirementTimers.get(recognition);
+
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.retirementTimers.delete(recognition);
+    }
+  }
+
+  private releaseRetiringRecognition(
+    recognition: SpeechRecognitionInstance
+  ): void {
+    this.clearRetirementTimer(recognition);
+    this.retiringRecognitions.delete(recognition);
+
+    console.info(
+      "[Nodysom AI] Previous recognition instance released from tracking.",
+      {
+        remainingRetiringSessions: this.retiringRecognitions.size
+      }
+    );
+  }
+
   private retireRecognition(
     recognition: SpeechRecognitionInstance
   ): void {
     this.retiringRecognitions.add(recognition);
+
+    /*
+     * Do not retain a stale recognition instance forever if the
+     * browser fails to dispatch onend.
+     *
+     * This timer only releases our internal tracking. It cannot
+     * guarantee that the browser's underlying speech service has
+     * actually stopped.
+     */
+    this.clearRetirementTimer(recognition);
+
+    const retirementTimer = setTimeout(() => {
+      this.releaseRetiringRecognition(recognition);
+    }, RETIRING_RECOGNITION_TIMEOUT_MS);
+
+    this.retirementTimers.set(
+      recognition,
+      retirementTimer
+    );
 
     try {
       if (typeof recognition.abort === "function") {
@@ -206,12 +253,6 @@ class SpeechService {
         "[Nodysom AI] Could not retire recognition instance:",
         error
       );
-
-      /*
-       * Do not assume the browser has released its recognition
-       * service merely because abort() or stop() threw an error.
-       * Keep the instance marked as retiring until onend arrives.
-       */
     }
   }
 
@@ -432,9 +473,9 @@ class SpeechService {
       this.reportError(session, message);
 
       /*
-       * End the UI session immediately, but keep the old
-       * recognition instance retiring until the browser releases it.
-       * A new session must not overlap this one.
+       * Finish the UI session so it does not remain stuck.
+       * Track the old instance only temporarily because some browsers
+       * do not send onend reliably.
        */
       this.clearSessionState(session);
 
@@ -471,7 +512,10 @@ class SpeechService {
 
       console.info(
         "[Nodysom AI] Speech recognition started.",
-        { sessionId: session.id, lang: recognition.lang }
+        {
+          sessionId: session.id,
+          lang: recognition.lang
+        }
       );
 
       if (session.intentionalStop) {
@@ -609,11 +653,6 @@ class SpeechService {
         }
       );
 
-      /*
-       * Send the transcript to the component before changing
-       * the session lifecycle. This preserves the existing
-       * interim/final transcript behavior.
-       */
       try {
         session.handlers.onResult(
           transcript,
@@ -666,10 +705,6 @@ class SpeechService {
 
       this.clearSessionWatchdog(session);
 
-      /*
-       * Do not clear intentionalStop before checking it.
-       * Some browsers emit "aborted" after a user-requested stop.
-       */
       if (
         session.intentionalStop &&
         (error === "aborted" || error === "no-speech")
@@ -686,13 +721,9 @@ class SpeechService {
         { sessionId: session.id }
       );
 
-      this.retiringRecognitions.delete(recognition);
+      this.releaseRetiringRecognition(recognition);
 
       if (!this.isSessionActive(session)) {
-        /*
-         * This was an old or cancelled session. It may now be
-         * safely removed from the retiring list.
-         */
         return;
       }
 
@@ -770,18 +801,24 @@ class SpeechService {
     }
 
     /*
-     * Do not start another session while one is active or while
-     * an older browser recognition instance is still being released.
+     * Prevent duplicate sessions that are actually active.
+     *
+     * IMPORTANT:
+     * retiringRecognitions.size is intentionally NOT used as a
+     * permanent start blocker. An old recognition instance may fail
+     * to send onend, which would otherwise disable the microphone.
+     *
+     * The browser can still reject start() with InvalidStateError.
+     * That error is handled below.
      */
     if (
       this.activeSession !== null ||
       this.isListening ||
       this.isStarting ||
-      this.startRequestPending ||
-      this.retiringRecognitions.size > 0
+      this.startRequestPending
     ) {
       console.warn(
-        "[Nodysom AI] Duplicate or overlapping recognition start rejected.",
+        "[Nodysom AI] Duplicate recognition start rejected.",
         {
           activeSession: this.activeSession?.id ?? null,
           retiringSessions: this.retiringRecognitions.size,
@@ -791,7 +828,7 @@ class SpeechService {
       );
 
       handlers.onError(
-        "Speech recognition is still finishing the previous session. Wait a moment, then tap the microphone again."
+        "Speech recognition is already starting or listening. Wait a moment, then try again."
       );
 
       handlers.onEnd();
@@ -829,10 +866,6 @@ class SpeechService {
     );
 
     try {
-      /*
-       * Call start() synchronously from the user's microphone
-       * click handler so browsers can honor the user gesture.
-       */
       session.recognition.start();
 
       this.startWatchdog(
@@ -862,11 +895,6 @@ class SpeechService {
 
       this.clearSessionWatchdog(session);
 
-      /*
-       * InvalidStateError can mean the browser's underlying speech
-       * service is still busy. Retire this recognizer instead of
-       * reusing it immediately.
-       */
       if (errorName === "InvalidStateError") {
         this.clearSessionState(session);
 
@@ -963,11 +991,6 @@ class SpeechService {
       );
 
       if (errorName === "InvalidStateError") {
-        /*
-         * Do not call finishSession immediately and then start a new
-         * session on the assumption that the browser is ready.
-         * Retire this recognizer and wait for its onend event.
-         */
         this.clearSessionState(session);
 
         this.retireRecognition(session.recognition);
@@ -1000,11 +1023,6 @@ class SpeechService {
       return;
     }
 
-    /*
-     * Some implementations do not fire onend after stop().
-     * Finish the UI session after a short grace period but continue
-     * tracking the recognizer until its actual onend event arrives.
-     */
     session.watchdog = setTimeout(() => {
       if (!this.isSessionActive(session)) {
         return;
@@ -1052,7 +1070,7 @@ class SpeechService {
     this.clearSessionWatchdog(session);
 
     /*
-     * Invalidate the session so late events cannot alter the UI.
+     * Invalidate callbacks from the session being cancelled.
      */
     this.sessionId += 1;
     this.activeSession = null;
@@ -1171,9 +1189,6 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public stopSpeaking(): void {
-    /*
-     * Invalidate callbacks from the previous speech operation.
-     */
     this.speechSessionId += 1;
 
     if (!this.isTTSSupported()) {
