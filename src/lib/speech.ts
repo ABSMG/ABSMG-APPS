@@ -1,4 +1,17 @@
 // Speech Recognition and Text-to-Speech audio integration for Nodysom AI
+//
+// Features preserved and improved:
+// - Browser Speech Recognition and WebKit Speech Recognition support
+// - Recognition permission and microphone diagnostics
+// - Android WebView and browser compatibility diagnostics
+// - Interim and final transcript results
+// - Recognition session tracking and duplicate-start prevention
+// - Recognition start, no-result, stop and error watchdogs
+// - Safe recognition cleanup and retirement tracking
+// - Detailed recognition error messages
+// - Text-to-Speech with voice selection and language fallback
+// - Speech cancellation and stale callback protection
+// - Existing SpeechService public API and shared speechService export
 
 export interface SpeechRecognitionHandlers {
   onResult: (transcript: string, isFinal: boolean) => void;
@@ -58,11 +71,29 @@ type RecognitionSession = {
   watchdog: ReturnType<typeof setTimeout> | null;
 };
 
+type SpeechSynthesisVoiceLike = SpeechSynthesisVoice;
+
+type SpeechDiagnostics = {
+  isSecureContext: boolean;
+  isAndroid: boolean;
+  isLikelyAndroidWebView: boolean;
+  isRecognitionSupported: boolean;
+  isTextToSpeechSupported: boolean;
+  isMicrophoneCaptureSupported: boolean;
+  hasMediaDevices: boolean;
+  hasSpeechSynthesis: boolean;
+  userAgent: string;
+  language: string;
+};
+
 const RECOGNITION_START_TIMEOUT_MS = 10000;
 const RECOGNITION_NO_RESULT_TIMEOUT_MS = 15000;
 const RECOGNITION_STOP_TIMEOUT_MS = 3000;
 const RETIRING_RECOGNITION_TIMEOUT_MS = 5000;
 const RECOGNITION_ERROR_CLEANUP_TIMEOUT_MS = 2000;
+
+const SPEECH_TEXT_MAX_LENGTH = 300;
+const SPEECH_SYNTHESIS_START_TIMEOUT_MS = 10000;
 
 class SpeechService {
   private recognitionConstructor: SpeechRecognitionConstructor | null = null;
@@ -94,8 +125,49 @@ class SpeechService {
 
   private speechSessionId = 0;
 
+  private speechStartTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private activeUtterance: SpeechSynthesisUtterance | null = null;
+
+  private microphoneCheckInProgress = false;
+
   constructor() {
+    this.detectRecognitionSupport();
+
     if (typeof window === "undefined") {
+      return;
+    }
+
+    if (this.recognitionConstructor) {
+      console.info(
+        "[Nodysom AI] Speech Recognition API detected."
+      );
+    } else {
+      console.warn(
+        "[Nodysom AI] Speech Recognition API is unavailable in this environment."
+      );
+    }
+
+    if (this.isTTSSupported()) {
+      console.info(
+        "[Nodysom AI] Text-to-Speech API detected."
+      );
+    } else {
+      console.warn(
+        "[Nodysom AI] Text-to-Speech API is unavailable in this environment."
+      );
+    }
+
+    this.logEnvironmentDiagnostics();
+  }
+
+  // ---------------------------------------------------------
+  // ENVIRONMENT AND FEATURE DETECTION
+  // ---------------------------------------------------------
+
+  private detectRecognitionSupport(): void {
+    if (typeof window === "undefined") {
+      this.recognitionConstructor = null;
       return;
     }
 
@@ -108,15 +180,111 @@ class SpeechService {
       speechWindow.SpeechRecognition ||
       speechWindow.webkitSpeechRecognition ||
       null;
+  }
 
-    if (!this.recognitionConstructor) {
-      console.warn(
-        "[Nodysom AI] Speech Recognition API is unavailable in this browser."
-      );
-      return;
+  private getUserAgent(): string {
+    if (typeof navigator === "undefined") {
+      return "";
     }
 
-    console.info("[Nodysom AI] Speech Recognition API detected.");
+    return navigator.userAgent || "";
+  }
+
+  private isAndroidEnvironment(): boolean {
+    return /Android/i.test(this.getUserAgent());
+  }
+
+  private isLikelyAndroidWebView(): boolean {
+    const userAgent = this.getUserAgent();
+
+    return (
+      /Android/i.test(userAgent) &&
+      (
+        /\bwv\b/i.test(userAgent) ||
+        /Version\/[\d.]+.*Chrome\/[\d.]+.*Mobile/i.test(userAgent)
+      )
+    );
+  }
+
+  private isSecureEnvironment(): boolean {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    if (window.isSecureContext === true) {
+      return true;
+    }
+
+    const protocol = window.location?.protocol || "";
+    const hostname = window.location?.hostname || "";
+
+    return (
+      protocol === "https:" ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]"
+    );
+  }
+
+  private logEnvironmentDiagnostics(): void {
+    const diagnostics = this.getDiagnostics();
+
+    console.info(
+      "[Nodysom AI] Speech environment diagnostics:",
+      diagnostics
+    );
+
+    if (!diagnostics.isSecureContext) {
+      console.warn(
+        "[Nodysom AI] The current page is not in a secure context. Browser microphone access may be unavailable."
+      );
+    }
+
+    if (
+      diagnostics.isLikelyAndroidWebView &&
+      !diagnostics.isRecognitionSupported
+    ) {
+      console.warn(
+        "[Nodysom AI] Android WebView does not expose the Web Speech Recognition API. Microphone permission alone cannot add this API."
+      );
+    }
+  }
+
+  /**
+   * Returns environment information for troubleshooting.
+   * This is an additive API; existing callers do not need to change.
+   */
+  public getDiagnostics(): SpeechDiagnostics {
+    const hasWindow = typeof window !== "undefined";
+    const hasNavigator = typeof navigator !== "undefined";
+
+    const mediaDevicesAvailable =
+      hasNavigator &&
+      typeof navigator.mediaDevices !== "undefined";
+
+    const microphoneCaptureSupported =
+      mediaDevicesAvailable &&
+      typeof navigator.mediaDevices.getUserMedia === "function";
+
+    return {
+      isSecureContext: this.isSecureEnvironment(),
+      isAndroid: this.isAndroidEnvironment(),
+      isLikelyAndroidWebView: this.isLikelyAndroidWebView(),
+      isRecognitionSupported:
+        this.recognitionConstructor !== null,
+      isTextToSpeechSupported: this.isTTSSupported(),
+      isMicrophoneCaptureSupported:
+        microphoneCaptureSupported,
+      hasMediaDevices: mediaDevicesAvailable,
+      hasSpeechSynthesis:
+        hasWindow &&
+        "speechSynthesis" in window,
+      userAgent: this.getUserAgent(),
+      language:
+        hasNavigator
+          ? navigator.language || "en-US"
+          : "en-US"
+    };
   }
 
   // ---------------------------------------------------------
@@ -209,7 +377,8 @@ class SpeechService {
     console.info(
       "[Nodysom AI] Previous recognition instance released from tracking.",
       {
-        remainingRetiringSessions: this.retiringRecognitions.size
+        remainingRetiringSessions:
+          this.retiringRecognitions.size
       }
     );
   }
@@ -348,6 +517,185 @@ class SpeechService {
     this.safelyCallOnEnd(session);
   }
 
+  private safelyNotifyError(
+    handlers: SpeechRecognitionHandlers,
+    error: string
+  ): void {
+    try {
+      handlers.onError(error);
+    } catch (handlerError) {
+      console.error(
+        "[Nodysom AI] Recognition error callback failed:",
+        handlerError
+      );
+    }
+  }
+
+  private safelyNotifyEnd(
+    handlers: SpeechRecognitionHandlers
+  ): void {
+    try {
+      handlers.onEnd();
+    } catch (handlerError) {
+      console.error(
+        "[Nodysom AI] Recognition end callback failed:",
+        handlerError
+      );
+    }
+  }
+
+  // ---------------------------------------------------------
+  // MICROPHONE PERMISSION DIAGNOSTICS
+  // ---------------------------------------------------------
+
+  /**
+   * Checks whether microphone access is available in the current
+   * environment. It does not keep the microphone open.
+   *
+   * This method is optional and additive. Existing callers can
+   * continue using startListening() as before.
+   *
+   * IMPORTANT:
+   * Browsers may require this to be called from a user gesture.
+   * Android WebView additionally requires native application
+   * permissions and a WebChromeClient permission handler.
+   */
+  public async checkMicrophonePermission(): Promise<{
+    supported: boolean;
+    granted: boolean | null;
+    message: string;
+  }> {
+    if (typeof window === "undefined") {
+      return {
+        supported: false,
+        granted: false,
+        message:
+          "Microphone access is unavailable because the browser window does not exist."
+      };
+    }
+
+    if (!this.isSecureEnvironment()) {
+      return {
+        supported: false,
+        granted: false,
+        message:
+          "Microphone access requires HTTPS or a supported local secure context. Open Nodysom AI using its HTTPS address."
+      };
+    }
+
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== "function"
+    ) {
+      return {
+        supported: false,
+        granted: null,
+        message:
+          "This environment does not expose browser microphone capture. On the installed Android app, native WebView microphone permission handling may be required."
+      };
+    }
+
+    if (this.microphoneCheckInProgress) {
+      return {
+        supported: true,
+        granted: null,
+        message:
+          "A microphone permission check is already in progress."
+      };
+    }
+
+    this.microphoneCheckInProgress = true;
+
+    let stream: MediaStream | null = null;
+
+    try {
+      /*
+       * getUserMedia triggers the browser's permission flow when
+       * permission has not already been granted.
+       */
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+
+      return {
+        supported: true,
+        granted: true,
+        message:
+          "Microphone access is available. If voice recognition still fails, the browser speech-recognition service may be unavailable."
+      };
+    } catch (error: unknown) {
+      const errorName =
+        error instanceof Error
+          ? error.name
+          : "";
+
+      console.warn(
+        "[Nodysom AI] Microphone permission check failed:",
+        {
+          errorName,
+          error
+        }
+      );
+
+      if (
+        errorName === "NotAllowedError" ||
+        errorName === "PermissionDeniedError" ||
+        errorName === "SecurityError"
+      ) {
+        return {
+          supported: true,
+          granted: false,
+          message:
+            "Microphone access was denied. Allow microphone permission for Nodysom AI in Android app settings or browser site settings, then try again."
+        };
+      }
+
+      if (errorName === "NotFoundError") {
+        return {
+          supported: true,
+          granted: false,
+          message:
+            "No available microphone was found. Check that the phone has a working microphone."
+        };
+      }
+
+      if (errorName === "NotReadableError") {
+        return {
+          supported: true,
+          granted: false,
+          message:
+            "The microphone could not be opened. Another app may be using it, or the device may have a microphone problem."
+        };
+      }
+
+      if (errorName === "OverconstrainedError") {
+        return {
+          supported: true,
+          granted: false,
+          message:
+            "The requested microphone configuration is not supported by this device."
+        };
+      }
+
+      return {
+        supported: true,
+        granted: null,
+        message:
+          "The microphone permission check could not finish. Check app permissions and try again."
+      };
+    } finally {
+      if (stream) {
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+      }
+
+      this.microphoneCheckInProgress = false;
+    }
+  }
+
   // ---------------------------------------------------------
   // ERROR HANDLING
   // ---------------------------------------------------------
@@ -355,24 +703,26 @@ class SpeechService {
   private mapRecognitionError(error: string): string {
     const normalizedError = error.toLowerCase().trim();
 
+    const diagnostics = this.getDiagnostics();
+
     const errorMessages: Record<string, string> = {
       "not-allowed":
-        "Microphone or speech-recognition permission was denied. Allow microphone access for Nodysom AI in your browser settings, then try again.",
+        "Microphone or speech-recognition permission was denied. On Chrome, allow microphone access in the site's settings. On the installed Android app, allow microphone access in Android Settings → Apps → Nodysom AI → Permissions. If permission is already allowed, the WebView speech-recognition service may be unavailable.",
 
       "service-not-allowed":
-        "The browser's speech-recognition service is blocked or unavailable. Check your browser settings and try again.",
+        "The browser's speech-recognition service is blocked or unavailable. Check browser settings and internet access. On Android WebView, this API may not be available even when microphone permission is granted.",
 
       "audio-capture":
-        "The microphone could not be opened. Check that your microphone is available and that no other app is blocking it.",
+        "The microphone could not be opened. Check Android microphone permission, confirm the microphone is working, and close other apps that may be using it.",
 
       "network":
-        "The speech-recognition service could not connect. Check your internet connection and try again.",
+        "The speech-recognition service could not connect. Check your internet connection. Some browser speech-recognition services require a working network connection.",
 
       "no-speech":
-        "No speech was detected. Tap the microphone and speak clearly after listening starts.",
+        "No speech was detected. Tap the microphone, wait until listening starts, and then speak clearly.",
 
       "language-not-supported":
-        "The selected speech-recognition language is not supported by this browser. Try English (United States) or another supported language.",
+        "The selected speech-recognition language is not supported. Try en-US or another language supported by your browser.",
 
       "aborted":
         "Speech recognition was interrupted. Tap the microphone to try again.",
@@ -384,18 +734,60 @@ class SpeechService {
         "The browser does not support the selected recognition phrases.",
 
       "microphone error":
-        "The microphone could not complete speech recognition. Check microphone permission and try again.",
+        "The microphone could not complete speech recognition. Check microphone permission, device availability and browser compatibility.",
 
       "not supported":
-        "Speech recognition is not supported in this browser. Try an up-to-date browser with Web Speech API support.",
+        "Speech recognition is not supported in this environment. Try a supported version of Chrome. The installed Android app may require native speech-recognition integration.",
 
       "invalidstateerror":
         "The browser is still using a previous speech-recognition session. Wait a moment, then try again."
     };
 
+    if (errorMessages[normalizedError]) {
+      if (
+        normalizedError === "not-allowed" &&
+        diagnostics.isLikelyAndroidWebView
+      ) {
+        return (
+          "Android app speech recognition was blocked. First allow Microphone permission in Android Settings → Apps → Nodysom AI → Permissions. If it is already allowed, this Android WebView may not provide the browser speech-recognition service; the app needs a supported native recognition implementation."
+        );
+      }
+
+      return errorMessages[normalizedError];
+    }
+
+    if (
+      /permissiondeniederror/i.test(error) ||
+      /permission denied/i.test(error)
+    ) {
+      return (
+        "Microphone permission was denied. Allow microphone access in Android app settings or browser site settings. If permission is already granted, the browser speech-recognition service may be blocked."
+      );
+    }
+
+    if (/notallowederror/i.test(error)) {
+      return (
+        "Microphone permission was denied. Allow microphone access in Android app settings or browser site settings, then try again."
+      );
+    }
+
+    if (/invalidstateerror/i.test(error)) {
+      return (
+        "The browser is still using a previous speech-recognition session. Wait a moment, then try again."
+      );
+    }
+
+    if (
+      diagnostics.isLikelyAndroidWebView &&
+      !diagnostics.isRecognitionSupported
+    ) {
+      return (
+        "Speech recognition is unavailable in this Android WebView. Microphone permission alone cannot add speech recognition support. The installed app needs a supported native recognition implementation."
+      );
+    }
+
     return (
-      errorMessages[normalizedError] ||
-      `Speech recognition failed (${error || "unknown error"}). Check microphone permission, internet access and browser compatibility, then try again.`
+      `Speech recognition failed (${error || "unknown error"}). Check microphone permission, internet access, selected language and browser compatibility, then try again.`
     );
   }
 
@@ -415,16 +807,10 @@ class SpeechService {
       { sessionId: session.id }
     );
 
-    try {
-      session.handlers.onError(
-        this.mapRecognitionError(error)
-      );
-    } catch (handlerError) {
-      console.error(
-        "[Nodysom AI] Recognition error callback failed:",
-        handlerError
-      );
-    }
+    this.safelyNotifyError(
+      session.handlers,
+      this.mapRecognitionError(error)
+    );
   }
 
   private reportError(
@@ -759,6 +1145,8 @@ class SpeechService {
   // ---------------------------------------------------------
 
   public isSpeechSupported(): boolean {
+    this.detectRecognitionSupport();
+
     return this.recognitionConstructor !== null;
   }
 
@@ -786,6 +1174,75 @@ class SpeechService {
     return this.isSpeaking;
   }
 
+  /**
+   * Returns available system voices.
+   * This method is additive and does not change the existing API.
+   */
+  public getAvailableVoices(): SpeechSynthesisVoiceLike[] {
+    if (!this.isTTSSupported()) {
+      return [];
+    }
+
+    try {
+      return window.speechSynthesis.getVoices();
+    } catch (error) {
+      console.warn(
+        "[Nodysom AI] Could not retrieve system speech voices:",
+        error
+      );
+
+      return [];
+    }
+  }
+
+  private findBestVoice(
+    lang: string
+  ): SpeechSynthesisVoiceLike | null {
+    const voices = this.getAvailableVoices();
+
+    if (voices.length === 0) {
+      return null;
+    }
+
+    const requestedLanguage =
+      (lang || "en-US").trim().toLowerCase();
+
+    const exactMatch = voices.find(
+      (voice) =>
+        voice.lang.toLowerCase() === requestedLanguage
+    );
+
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const languagePrefix =
+      requestedLanguage.split("-")[0];
+
+    const languageMatch = voices.find(
+      (voice) =>
+        voice.lang.toLowerCase().split("-")[0] ===
+        languagePrefix
+    );
+
+    if (languageMatch) {
+      return languageMatch;
+    }
+
+    const englishVoice = voices.find(
+      (voice) => voice.lang.toLowerCase().startsWith("en")
+    );
+
+    return englishVoice || null;
+  }
+
+  private clearSpeechStartTimer(): void {
+    if (this.speechStartTimer !== null) {
+      clearTimeout(this.speechStartTimer);
+      this.speechStartTimer = null;
+    }
+  }
+
   // ---------------------------------------------------------
   // START SPEECH RECOGNITION
   // ---------------------------------------------------------
@@ -795,20 +1252,37 @@ class SpeechService {
     lang: string = "en-US"
   ): void {
     if (typeof window === "undefined") {
-      handlers.onError(
+      this.safelyNotifyError(
+        handlers,
         "Speech recognition is unavailable because the browser window does not exist."
       );
 
-      handlers.onEnd();
+      this.safelyNotifyEnd(handlers);
       return;
     }
 
+    this.detectRecognitionSupport();
+
     if (!this.recognitionConstructor) {
-      handlers.onError(
-        "Speech recognition is not supported in this browser. Use an up-to-date browser with Web Speech API support."
+      const diagnostics = this.getDiagnostics();
+
+      const message =
+        diagnostics.isLikelyAndroidWebView
+          ? "Speech recognition is unavailable in this Android WebView. Microphone permission alone cannot add speech recognition support. The installed app needs a supported native recognition implementation."
+          : "Speech recognition is not supported in this browser. Use an up-to-date browser with Web Speech API support.";
+
+      this.safelyNotifyError(handlers, message);
+      this.safelyNotifyEnd(handlers);
+      return;
+    }
+
+    if (!this.isSecureEnvironment()) {
+      this.safelyNotifyError(
+        handlers,
+        "Speech recognition requires a secure HTTPS page or a supported local secure context. Open Nodysom AI using its HTTPS address."
       );
 
-      handlers.onEnd();
+      this.safelyNotifyEnd(handlers);
       return;
     }
 
@@ -825,18 +1299,21 @@ class SpeechService {
       console.warn(
         "[Nodysom AI] Duplicate recognition start rejected.",
         {
-          activeSession: this.activeSession?.id ?? null,
-          retiringSessions: this.retiringRecognitions.size,
+          activeSession:
+            this.activeSession?.id ?? null,
+          retiringSessions:
+            this.retiringRecognitions.size,
           isListening: this.isListening,
           isStarting: this.isStarting
         }
       );
 
-      handlers.onError(
+      this.safelyNotifyError(
+        handlers,
         "Speech recognition is already starting or listening. Wait a moment, then try again."
       );
 
-      handlers.onEnd();
+      this.safelyNotifyEnd(handlers);
       return;
     }
 
@@ -855,8 +1332,12 @@ class SpeechService {
         error
       );
 
-      handlers.onError(this.mapRecognitionError(message));
-      handlers.onEnd();
+      this.safelyNotifyError(
+        handlers,
+        this.mapRecognitionError(message)
+      );
+
+      this.safelyNotifyEnd(handlers);
       return;
     }
 
@@ -866,17 +1347,25 @@ class SpeechService {
       "[Nodysom AI] Requesting speech recognition start.",
       {
         sessionId: session.id,
-        language: session.recognition.lang
+        language: session.recognition.lang,
+        secureContext: this.isSecureEnvironment(),
+        android: this.isAndroidEnvironment(),
+        androidWebView: this.isLikelyAndroidWebView()
       }
     );
 
     try {
+      /*
+       * Keep start() synchronous with the user action. Browsers
+       * may reject microphone or recognition requests if the call
+       * is delayed until after an asynchronous permission check.
+       */
       session.recognition.start();
 
       this.startWatchdog(
         session,
         RECOGNITION_START_TIMEOUT_MS,
-        "The browser did not start speech recognition within 10 seconds. Check microphone permission and browser compatibility."
+        "The browser did not start speech recognition within 10 seconds. Check microphone permission, browser compatibility and the speech-recognition service."
       );
     } catch (error: unknown) {
       const errorName =
@@ -905,52 +1394,25 @@ class SpeechService {
 
         this.retireRecognition(session.recognition);
 
-        try {
-          handlers.onError(
-            "The browser is still using its speech-recognition service. Wait a moment, then tap the microphone again."
-          );
-        } catch (handlerError) {
-          console.error(
-            "[Nodysom AI] Error callback failed:",
-            handlerError
-          );
-        }
+        this.safelyNotifyError(
+          handlers,
+          "The browser is still using its speech-recognition service. Wait a moment, then tap the microphone again."
+        );
 
-        try {
-          handlers.onEnd();
-        } catch (handlerError) {
-          console.error(
-            "[Nodysom AI] End callback failed:",
-            handlerError
-          );
-        }
-
+        this.safelyNotifyEnd(handlers);
         return;
       }
 
       this.clearSessionState(session, true);
 
-      try {
-        handlers.onError(
-          this.mapRecognitionError(
-            errorName || errorMessage
-          )
-        );
-      } catch (handlerError) {
-        console.error(
-          "[Nodysom AI] Error callback failed:",
-          handlerError
-        );
-      }
+      this.safelyNotifyError(
+        handlers,
+        this.mapRecognitionError(
+          errorName || errorMessage
+        )
+      );
 
-      try {
-        handlers.onEnd();
-      } catch (handlerError) {
-        console.error(
-          "[Nodysom AI] End callback failed:",
-          handlerError
-        );
-      }
+      this.safelyNotifyEnd(handlers);
     }
   }
 
@@ -1073,6 +1535,10 @@ class SpeechService {
     onDone?: () => void
   ): void {
     if (!this.isTTSSupported()) {
+      console.warn(
+        "[Nodysom AI] Text-to-Speech is unavailable in this environment."
+      );
+
       if (onDone) {
         onDone();
       }
@@ -1080,11 +1546,19 @@ class SpeechService {
       return;
     }
 
+    /*
+     * Remove common Markdown formatting and code fences without
+     * stripping normal punctuation needed for natural speech.
+     */
     const cleanText = text
+      .replace(/```[\s\S]*?```/g, " ")
       .replace(/[*_#`]/g, "")
-      .replace(/\[.*?\]/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/https?:\/\/\S+/gi, "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 300);
+      .slice(0, SPEECH_TEXT_MAX_LENGTH);
 
     if (!cleanText) {
       if (onDone) {
@@ -1098,28 +1572,93 @@ class SpeechService {
 
     const currentSpeechSessionId = this.speechSessionId;
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
+    const utterance =
+      new SpeechSynthesisUtterance(cleanText);
 
-    utterance.lang =
+    const requestedLanguage =
       typeof lang === "string" && lang.trim()
         ? lang.trim()
         : "en-US";
 
+    utterance.lang = requestedLanguage;
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
-    utterance.onend = () => {
+    /*
+     * Assign a system voice when one matching the requested
+     * language is available. The browser's default voice remains
+     * available when the voice list has not loaded yet.
+     */
+    const selectedVoice =
+      this.findBestVoice(requestedLanguage);
+
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+
+    let completed = false;
+
+    const finishSpeech = (
+      reason: "ended" | "error" | "timeout"
+    ): void => {
+      if (completed) {
+        return;
+      }
+
       if (
         currentSpeechSessionId !== this.speechSessionId
       ) {
         return;
       }
 
+      completed = true;
+
+      this.clearSpeechStartTimer();
       this.isSpeaking = false;
+      this.activeUtterance = null;
+
+      if (reason !== "ended") {
+        console.warn(
+          "[Nodysom AI] Text-to-speech did not finish normally.",
+          { reason }
+        );
+      }
 
       if (onDone) {
-        onDone();
+        try {
+          onDone();
+        } catch (error) {
+          console.error(
+            "[Nodysom AI] Text-to-speech completion callback failed:",
+            error
+          );
+        }
       }
+    };
+
+    utterance.onstart = () => {
+      if (
+        currentSpeechSessionId !== this.speechSessionId
+      ) {
+        return;
+      }
+
+      this.clearSpeechStartTimer();
+      this.isSpeaking = true;
+
+      console.info(
+        "[Nodysom AI] Text-to-speech started.",
+        {
+          language: utterance.lang,
+          voice: utterance.voice?.name || "system default",
+          textLength: cleanText.length
+        }
+      );
+    };
+
+    utterance.onend = () => {
+      finishSpeech("ended");
     };
 
     utterance.onerror = (event) => {
@@ -1129,33 +1668,72 @@ class SpeechService {
         return;
       }
 
-      this.isSpeaking = false;
-
       console.warn(
         "[Nodysom AI] Text-to-speech error:",
         event.error
       );
 
-      if (onDone) {
-        onDone();
-      }
+      finishSpeech("error");
     };
 
     this.isSpeaking = true;
+    this.activeUtterance = utterance;
+
+    /*
+     * Some Android WebView implementations do not dispatch
+     * speech events reliably. The timeout prevents the UI from
+     * remaining in the speaking state forever if speech never
+     * starts. It does not claim that audio was played.
+     */
+    this.speechStartTimer = setTimeout(() => {
+      if (
+        currentSpeechSessionId !== this.speechSessionId ||
+        !this.isSpeaking
+      ) {
+        return;
+      }
+
+      console.warn(
+        "[Nodysom AI] Text-to-speech start timeout reached."
+      );
+
+      try {
+        window.speechSynthesis.cancel();
+      } catch (error) {
+        console.warn(
+          "[Nodysom AI] Could not cancel stalled speech:",
+          error
+        );
+      }
+
+      finishSpeech("timeout");
+    }, SPEECH_SYNTHESIS_START_TIMEOUT_MS);
 
     try {
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      this.isSpeaking = false;
+      /*
+       * Resume a paused synthesis engine before queuing speech.
+       * This can help in some browser and Android implementations.
+       */
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
 
+      window.speechSynthesis.speak(utterance);
+
+      /*
+       * Some browsers need a resume after speak() if the engine
+       * unexpectedly reports itself as paused.
+       */
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    } catch (error) {
       console.warn(
         "[Nodysom AI] Could not start text-to-speech:",
         error
       );
 
-      if (onDone) {
-        onDone();
-      }
+      finishSpeech("error");
     }
   }
 
@@ -1166,8 +1744,11 @@ class SpeechService {
   public stopSpeaking(): void {
     this.speechSessionId += 1;
 
+    this.clearSpeechStartTimer();
+
     if (!this.isTTSSupported()) {
       this.isSpeaking = false;
+      this.activeUtterance = null;
       return;
     }
 
@@ -1181,6 +1762,7 @@ class SpeechService {
     }
 
     this.isSpeaking = false;
+    this.activeUtterance = null;
   }
 }
 
