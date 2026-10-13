@@ -56,6 +56,109 @@ interface HomeViewProps {
 }
 
 /* =========================================================
+   DATE HELPERS
+   ========================================================= */
+
+/**
+ * Returns the current date using the device's local timezone.
+ * This prevents tasks around midnight from being assigned to
+ * the wrong date because of UTC conversion.
+ */
+function getLocalDateKey(
+  date: Date = new Date()
+): string {
+  const year = date.getFullYear();
+
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, '0');
+
+  const day = String(
+    date.getDate()
+  ).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Safely formats message timestamps.
+ *
+ * Supports:
+ * - ISO date strings
+ * - Valid date strings
+ * - Date objects
+ * - Time-only strings such as "10:30 AM"
+ * - Missing or invalid timestamps
+ *
+ * Invalid timestamps never display "Invalid Date".
+ */
+function formatMessageTime(
+  timestamp?: string | Date | null,
+  fallbackTime?: string
+): string {
+  if (
+    timestamp instanceof Date
+  ) {
+    if (
+      !Number.isNaN(
+        timestamp.getTime()
+      )
+    ) {
+      return timestamp.toLocaleTimeString(
+        [],
+        {
+          hour: '2-digit',
+          minute: '2-digit',
+        }
+      );
+    }
+
+    return fallbackTime || '';
+  }
+
+  if (
+    typeof timestamp === 'string'
+  ) {
+    const value = timestamp.trim();
+
+    if (value) {
+      /*
+       * Preserve an already formatted time.
+       * Examples: 10:30 AM, 10:30, 22:30.
+       */
+      const timeOnlyPattern =
+        /^(?:[01]?\d|2[0-3]):[0-5]\d(?:\s?[AaPp][Mm])?$/;
+
+      if (
+        timeOnlyPattern.test(value)
+      ) {
+        return value;
+      }
+
+      const parsedDate = new Date(
+        value
+      );
+
+      if (
+        !Number.isNaN(
+          parsedDate.getTime()
+        )
+      ) {
+        return parsedDate.toLocaleTimeString(
+          [],
+          {
+            hour: '2-digit',
+            minute: '2-digit',
+          }
+        );
+      }
+    }
+  }
+
+  return fallbackTime || '';
+}
+
+/* =========================================================
    AI RESPONSE RENDERER
    ========================================================= */
 
@@ -67,7 +170,10 @@ function renderInlineText(
   );
 
   return parts.map(
-    (part, index) => {
+    (
+      part,
+      index
+    ) => {
       if (
         part.startsWith('**') &&
         part.endsWith('**')
@@ -97,7 +203,9 @@ function renderInlineText(
       }
 
       return (
-        <React.Fragment key={index}>
+        <React.Fragment
+          key={index}
+        >
           {part}
         </React.Fragment>
       );
@@ -139,7 +247,9 @@ function renderAssistantContent(
 
     const type = listType;
 
-    if (type === 'number') {
+    if (
+      type === 'number'
+    ) {
       elements.push(
         <ol
           key={`list-${elements.length}`}
@@ -208,7 +318,9 @@ function renderAssistantContent(
 
           <span className="flex gap-1">
             <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
+
             <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
+
             <span className="h-1.5 w-1.5 rounded-full bg-slate-700" />
           </span>
         </div>
@@ -238,9 +350,7 @@ function renderAssistantContent(
       /* CODE BLOCK */
 
       if (
-        trimmed.startsWith(
-          '```'
-        )
+        trimmed.startsWith('```')
       ) {
         flushList();
 
@@ -323,8 +433,7 @@ function renderAssistantContent(
       if (bullet) {
         if (
           listType &&
-          listType !==
-            'bullet'
+          listType !== 'bullet'
         ) {
           flushList();
         }
@@ -348,8 +457,7 @@ function renderAssistantContent(
       if (numbered) {
         if (
           listType &&
-          listType !==
-            'number'
+          listType !== 'number'
         ) {
           flushList();
         }
@@ -431,9 +539,7 @@ function renderAssistantContent(
                   cellIndex
                 ) => (
                   <div
-                    key={
-                      cellIndex
-                    }
+                    key={cellIndex}
                     className="min-w-0 break-words text-xs leading-5 text-slate-300"
                   >
                     {renderInlineText(
@@ -456,7 +562,7 @@ function renderAssistantContent(
       elements.push(
         <p
           key={`paragraph-${index}`}
-          className="whitespace-pre-wrap text-sm leading-7 text-slate-300"
+          className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-300"
         >
           {renderInlineText(
             trimmed
@@ -497,18 +603,21 @@ export function HomeView({
   const [
     copiedMessageId,
     setCopiedMessageId,
-  ] = useState<
-    string | null
-  >(null);
+  ] = useState<string | null>(
+    null
+  );
 
   const name =
     user?.name?.trim() ||
     'there';
 
+  /*
+   * Use the local calendar date instead of UTC.
+   * This is important for users whose local date differs
+   * from the UTC date.
+   */
   const todayDate =
-    new Date()
-      .toISOString()
-      .split('T')[0];
+    getLocalDateKey();
 
   /* =======================================================
      SEND MESSAGE
@@ -543,15 +652,18 @@ export function HomeView({
   const handleQuickPrompt = (
     prompt: string
   ) => {
+    const cleanPrompt =
+      prompt.trim();
+
     if (
-      !prompt.trim() ||
+      !cleanPrompt ||
       isLoading
     ) {
       return;
     }
 
     onSendMessage?.(
-      prompt.trim()
+      cleanPrompt
     );
   };
 
@@ -564,10 +676,14 @@ export function HomeView({
   ) => {
     try {
       if (
+        typeof navigator === 'undefined' ||
         !navigator.clipboard ||
-        typeof navigator.clipboard.writeText !==
-          'function'
+        typeof navigator.clipboard.writeText !== 'function'
       ) {
+        console.warn(
+          'Clipboard access is unavailable in this browser.'
+        );
+
         return;
       }
 
@@ -583,8 +699,7 @@ export function HomeView({
         () => {
           setCopiedMessageId(
             (current) =>
-              current ===
-              item.id
+              current === item.id
                 ? null
                 : current
           );
@@ -610,9 +725,7 @@ export function HomeView({
         'Open the full AI chat assistant',
       icon: MessageCircle,
       action: () =>
-        onNavigate?.(
-          'chat'
-        ),
+        onNavigate?.('chat'),
       primary: true,
     },
     {
@@ -621,9 +734,7 @@ export function HomeView({
         'Find verified information',
       icon: Search,
       action: () =>
-        onNavigate?.(
-          'search'
-        ),
+        onNavigate?.('search'),
     },
     {
       title: 'Learn',
@@ -631,9 +742,7 @@ export function HomeView({
         'Study smarter every day',
       icon: BookOpen,
       action: () =>
-        onNavigate?.(
-          'learn'
-        ),
+        onNavigate?.('learn'),
     },
     {
       title: 'Planner',
@@ -641,9 +750,7 @@ export function HomeView({
         'Organize your day',
       icon: CalendarDays,
       action: () =>
-        onNavigate?.(
-          'planner'
-        ),
+        onNavigate?.('planner'),
     },
   ];
 
@@ -657,8 +764,7 @@ export function HomeView({
         chatHistory
           .filter(
             (item) =>
-              item.role !==
-              'system'
+              item.role !== 'system'
           )
           .slice(-6),
       [chatHistory]
@@ -674,8 +780,7 @@ export function HomeView({
         plannerItems
           .filter(
             (item) =>
-              item.date ===
-              todayDate
+              item.date === todayDate
           )
           .slice(0, 4),
       [
@@ -735,9 +840,7 @@ export function HomeView({
           {/* AI INPUT */}
 
           <form
-            onSubmit={
-              handleSubmit
-            }
+            onSubmit={handleSubmit}
             className="mt-7 max-w-2xl"
           >
             <div className="flex items-center gap-2 rounded-2xl border border-white/[0.10] bg-slate-950/60 p-2 shadow-xl backdrop-blur-xl">
@@ -750,46 +853,19 @@ export function HomeView({
               <input
                 type="text"
                 value={message}
-                onChange={(
-                  event
-                ) =>
+                onChange={(event) =>
                   setMessage(
-                    event.target
-                      .value
+                    event.target.value
                   )
                 }
-                onKeyDown={(
-                  event
-                ) => {
-                  if (
-                    event.key ===
-                      'Enter' &&
-                    !event.shiftKey
-                  ) {
-                    event.preventDefault();
-
-                    if (
-                      message.trim()
-                    ) {
-                      onSendMessage?.(
-                        message.trim()
-                      );
-
-                      setMessage(
-                        ''
-                      );
-                    }
-                  }
-                }}
                 placeholder={
                   isLoading
                     ? 'Nodysom is thinking...'
                     : 'Ask Nodysom anything...'
                 }
-                disabled={
-                  isLoading
-                }
+                disabled={isLoading}
                 maxLength={2000}
+                aria-label="Ask Nodysom AI"
                 className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
               />
 
@@ -808,11 +884,10 @@ export function HomeView({
                     className="animate-spin"
                   />
                 ) : (
-                  <Send
-                    size={17}
-                  />
+                  <Send size={17} />
                 )}
               </button>
+
             </div>
 
             <div className="mt-2 flex justify-end px-2 text-[9px] text-slate-700">
@@ -833,9 +908,7 @@ export function HomeView({
                 <button
                   key={prompt}
                   type="button"
-                  disabled={
-                    isLoading
-                  }
+                  disabled={isLoading}
                   onClick={() =>
                     handleQuickPrompt(
                       prompt
@@ -857,15 +930,11 @@ export function HomeView({
             <button
               type="button"
               onClick={() =>
-                onNavigate?.(
-                  'chat'
-                )
+                onNavigate?.('chat')
               }
               className="nodysom-btn nodysom-btn-primary group"
             >
-              <MessageCircle
-                size={17}
-              />
+              <MessageCircle size={17} />
 
               <span>
                 Start with Nodysom
@@ -884,14 +953,13 @@ export function HomeView({
               }
               className="nodysom-btn nodysom-btn-secondary"
             >
-              <MessageCircle
-                size={16}
-              />
+              <MessageCircle size={16} />
 
               Voice Assistant
             </button>
 
           </div>
+
         </div>
       </section>
 
@@ -899,8 +967,7 @@ export function HomeView({
           AI CONVERSATION
           ================================================= */}
 
-      {(recentMessages.length >
-        0 ||
+      {(recentMessages.length > 0 ||
         isLoading) && (
         <section className="mt-7">
 
@@ -920,9 +987,7 @@ export function HomeView({
             <button
               type="button"
               onClick={() =>
-                onNavigate?.(
-                  'chat'
-                )
+                onNavigate?.('chat')
               }
               className="group flex items-center gap-1 rounded-xl border border-white/[0.06] bg-white/[0.025] px-2.5 py-1.5 text-[9px] font-bold text-slate-500 transition hover:border-indigo-400/20 hover:bg-indigo-500/10 hover:text-indigo-300"
             >
@@ -941,8 +1006,7 @@ export function HomeView({
             {recentMessages.map(
               (item) => {
                 const isUser =
-                  item.role ===
-                  'user';
+                  item.role === 'user';
 
                 return (
                   <div
@@ -1011,9 +1075,7 @@ export function HomeView({
                                 item.id ? (
                                   <>
                                     <Check
-                                      size={
-                                        11
-                                      }
+                                      size={11}
                                     />
 
                                     Copied
@@ -1021,9 +1083,7 @@ export function HomeView({
                                 ) : (
                                   <>
                                     <Copy
-                                      size={
-                                        11
-                                      }
+                                      size={11}
                                     />
 
                                     Copy
@@ -1038,9 +1098,7 @@ export function HomeView({
 
                           {isUser ? (
                             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-indigo-50">
-                              {
-                                item.content
-                              }
+                              {item.content}
                             </p>
                           ) : (
                             <div className="mt-3 space-y-3 overflow-hidden">
@@ -1053,17 +1111,10 @@ export function HomeView({
                           {/* TIME */}
 
                           <p className="mt-3 text-[9px] font-medium text-slate-600">
-                            {item.timestamp
-                              ? new Date(
-                                  item.timestamp
-                                ).toLocaleTimeString(
-                                  [],
-                                  {
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  }
-                                )
-                              : currentTime}
+                            {formatMessageTime(
+                              item.timestamp,
+                              currentTime
+                            )}
                           </p>
 
                         </div>
@@ -1154,13 +1205,9 @@ export function HomeView({
 
               return (
                 <button
-                  key={
-                    item.title
-                  }
+                  key={item.title}
                   type="button"
-                  onClick={
-                    item.action
-                  }
+                  onClick={item.action}
                   className={`group relative overflow-hidden rounded-2xl border p-4 text-left transition-all duration-200 active:scale-[0.98] ${
                     item.primary
                       ? 'border-indigo-400/20 bg-indigo-500/[0.10] hover:border-indigo-400/35 hover:bg-indigo-500/[0.15]'
@@ -1177,9 +1224,7 @@ export function HomeView({
                           : 'bg-white/[0.06] text-slate-300'
                       }`}
                     >
-                      <Icon
-                        size={18}
-                      />
+                      <Icon size={18} />
                     </span>
 
                     <ArrowRight
@@ -1190,15 +1235,11 @@ export function HomeView({
                   </div>
 
                   <h4 className="text-sm font-bold text-white">
-                    {
-                      item.title
-                    }
+                    {item.title}
                   </h4>
 
                   <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                    {
-                      item.description
-                    }
+                    {item.description}
                   </p>
 
                 </button>
@@ -1222,9 +1263,7 @@ export function HomeView({
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-300">
-                <Target
-                  size={20}
-                />
+                <Target size={20} />
               </div>
 
               <div>
@@ -1248,8 +1287,7 @@ export function HomeView({
 
           <div className="mt-6 space-y-3">
 
-            {todayTasks.length >
-            0 ? (
+            {todayTasks.length > 0 ? (
               todayTasks.map(
                 (task) => (
                   <button
@@ -1279,9 +1317,7 @@ export function HomeView({
                           : 'text-slate-300'
                       }`}
                     >
-                      {
-                        task.title
-                      }
+                      {task.title}
                     </span>
 
                   </button>
@@ -1305,8 +1341,7 @@ export function HomeView({
                     <CheckCircle2
                       size={17}
                       className={
-                        index ===
-                        0
+                        index === 0
                           ? 'text-emerald-400'
                           : 'text-slate-600'
                       }
@@ -1326,17 +1361,13 @@ export function HomeView({
           <button
             type="button"
             onClick={() =>
-              onNavigate?.(
-                'planner'
-              )
+              onNavigate?.('planner')
             }
             className="mt-5 flex items-center gap-2 text-[11px] font-bold text-indigo-300 transition hover:text-white"
           >
             Open Planner
 
-            <ArrowRight
-              size={14}
-            />
+            <ArrowRight size={14} />
           </button>
 
         </div>
@@ -1375,18 +1406,12 @@ export function HomeView({
             <button
               type="button"
               onClick={() =>
-                onNavigate?.(
-                  'chat'
-                )
+                onNavigate?.('chat')
               }
-              disabled={
-                isLoading
-              }
+              disabled={isLoading}
               className="mt-5 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-indigo-400/20 bg-indigo-500/10 text-xs font-bold text-indigo-200 transition-all hover:bg-indigo-500/20 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <MessageCircle
-                size={15}
-              />
+              <MessageCircle size={15} />
 
               Open AI Chat
             </button>
@@ -1396,14 +1421,10 @@ export function HomeView({
               onClick={() =>
                 onOpenVoice?.()
               }
-              disabled={
-                isLoading
-              }
+              disabled={isLoading}
               className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.025] text-[11px] font-semibold text-slate-400 transition-all hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <MessageCircle
-                size={14}
-              />
+              <MessageCircle size={14} />
 
               Voice Assistant
             </button>
